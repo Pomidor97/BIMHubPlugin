@@ -58,7 +58,7 @@ namespace BIMHubPlugin
 
             Uri iconUri = new Uri("pack://application:,,,/BIMHubPlugin;component/Resources/icon.png");
             buttonData.LargeImage = new BitmapImage(iconUri);
-            buttonData.ToolTip = "Открыть каталог семейств BIMHub";
+            buttonData.ToolTip = "Открыть каталог семейств KAZGOR BIMHub ";
 
             panel.AddItem(buttonData);
         }

@@ -127,7 +127,7 @@ namespace BIMHubPlugin.Services
         {
             return new PluginConfig
             {
-                ApiBaseUrl = "https://localhost:7001",
+                ApiBaseUrl = "http://bimhub.kazgor.kz:5058/api",
                 ApiToken = "",
                 CacheSizeMB = 500,
                 RequestTimeoutSeconds = 300,
@@ -148,7 +148,7 @@ namespace BIMHubPlugin.Services
 
             if (string.IsNullOrWhiteSpace(config.ApiBaseUrl))
             {
-                config.ApiBaseUrl = "https://localhost:7001";
+                config.ApiBaseUrl = "http://bimhub.kazgor.kz:5058/api";
             }
 
             config.ApiBaseUrl = config.ApiBaseUrl.TrimEnd('/');

@@ -57,7 +57,7 @@
         <!-- Заголовок -->
         <Border Grid.Row="0" Background="#0078D4" Padding="10">
             <StackPanel Orientation="Horizontal">
-                <TextBlock Text="Каталог семейств BIMHub" 
+                <TextBlock Text="Каталог семейств KAZGOR BIMHub" 
                            FontSize="18" 
                            FontWeight="Bold" 
                            Foreground="White"

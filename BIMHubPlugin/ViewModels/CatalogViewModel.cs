@@ -17,6 +17,7 @@ namespace BIMHubPlugin.ViewModels
         private readonly CatalogApiClient _apiClient;
         private readonly FamilyLoaderService _loaderService;
         private readonly CacheService _cacheService;
+        private readonly System.Windows.Threading.Dispatcher _dispatcher;
 
         // Фильтры
         private string _searchText;
@@ -43,11 +44,16 @@ namespace BIMHubPlugin.ViewModels
         private string _statusMessage;
         private FamilyItem _selectedFamily;
 
-        public CatalogViewModel(CatalogApiClient apiClient, FamilyLoaderService loaderService, CacheService cacheService)
+        public CatalogViewModel(
+            CatalogApiClient apiClient, 
+            FamilyLoaderService loaderService, 
+            CacheService cacheService,
+            System.Windows.Threading.Dispatcher dispatcher)
         {
             _apiClient = apiClient ?? throw new ArgumentNullException(nameof(apiClient));
             _loaderService = loaderService ?? throw new ArgumentNullException(nameof(loaderService));
             _cacheService = cacheService ?? throw new ArgumentNullException(nameof(cacheService));
+            _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
 
             // Инициализация коллекций
             Families = new ObservableCollection<FamilyItem>();
@@ -257,6 +263,8 @@ namespace BIMHubPlugin.ViewModels
 
         #endregion
 
+        
+        
         #region Commands
 
         public ICommand SearchCommand { get; }
@@ -274,64 +282,71 @@ namespace BIMHubPlugin.ViewModels
         /// Загрузка начальных данных (фильтры + первая страница семейств)
         /// </summary>
         private async Task LoadInitialDataAsync()
+    {
+        try
         {
-            try
+            IsLoading = true;
+            StatusMessage = "Загрузка данных...";
+
+            SimpleLogger.Log("LoadInitialDataAsync started");
+
+            var categoriesTask = _apiClient.GetCategoriesAsync();
+            var sectionsTask = _apiClient.GetSectionsAsync();
+            var manufacturersTask = _apiClient.GetManufacturersAsync();
+            var versionsTask = _apiClient.GetRevitVersionsAsync();
+
+            await Task.WhenAll(categoriesTask, sectionsTask, manufacturersTask, versionsTask);
+
+            SimpleLogger.Log($"Loaded {categoriesTask.Result.Count} categories");
+
+            // Используем Dispatcher для обновления UI коллекций
+            _dispatcher.Invoke(() =>
             {
-                IsLoading = true;
-                StatusMessage = "Загрузка данных...";
+                SimpleLogger.Log("Updating UI collections...");
+                
+                Categories.Clear();
+                Categories.Add(new Category { Id = Guid.Empty, Name = "Все категории" });
+                foreach (var cat in categoriesTask.Result)
+                    Categories.Add(cat);
 
-                // Загружаем фильтры параллельно
-                var categoriesTask = _apiClient.GetCategoriesAsync();
-                var sectionsTask = _apiClient.GetSectionsAsync();
-                var manufacturersTask = _apiClient.GetManufacturersAsync();
-                var versionsTask = _apiClient.GetRevitVersionsAsync();
+                Sections.Clear();
+                Sections.Add(new Section { Id = Guid.Empty, Name = "Все разделы" });
+                foreach (var sec in sectionsTask.Result)
+                    Sections.Add(sec);
 
-                await Task.WhenAll(categoriesTask, sectionsTask, manufacturersTask, versionsTask);
+                Manufacturers.Clear();
+                Manufacturers.Add(new Manufacturer { Id = Guid.Empty, Name = "Все производители" });
+                foreach (var man in manufacturersTask.Result)
+                    Manufacturers.Add(man);
 
-                // Обновляем UI (в главном потоке)
-                System.Windows.Application.Current.Dispatcher.Invoke(() =>
-                {
-                    Categories.Clear();
-                    Categories.Add(new Category { Id = Guid.Empty, Name = "Все категории" });
-                    foreach (var cat in categoriesTask.Result)
-                        Categories.Add(cat);
+                RevitVersions.Clear();
+                RevitVersions.Add(new RevitVersion { Id = Guid.Empty, Name = "Все версии" });
+                foreach (var ver in versionsTask.Result)
+                    RevitVersions.Add(ver);
 
-                    Sections.Clear();
-                    Sections.Add(new Section { Id = Guid.Empty, Name = "Все разделы" });
-                    foreach (var sec in sectionsTask.Result)
-                        Sections.Add(sec);
+                SelectedCategory = Categories.FirstOrDefault();
+                SelectedSection = Sections.FirstOrDefault();
+                SelectedManufacturer = Manufacturers.FirstOrDefault();
+                SelectedRevitVersion = RevitVersions.FirstOrDefault();
+            });
 
-                    Manufacturers.Clear();
-                    Manufacturers.Add(new Manufacturer { Id = Guid.Empty, Name = "Все производители" });
-                    foreach (var man in manufacturersTask.Result)
-                        Manufacturers.Add(man);
+            SimpleLogger.Log("UI update completed");
 
-                    RevitVersions.Clear();
-                    RevitVersions.Add(new RevitVersion { Id = Guid.Empty, Name = "Все версии" });
-                    foreach (var ver in versionsTask.Result)
-                        RevitVersions.Add(ver);
+            await LoadPageAsync();
 
-                    // Устанавливаем первые элементы как выбранные по умолчанию
-                    SelectedCategory = Categories.FirstOrDefault();
-                    SelectedSection = Sections.FirstOrDefault();
-                    SelectedManufacturer = Manufacturers.FirstOrDefault();
-                    SelectedRevitVersion = RevitVersions.FirstOrDefault();
-                });
-
-                // Загружаем семейства
-                await LoadPageAsync();
-
-                StatusMessage = "Готово";
-            }
-            catch (Exception ex)
-            {
-                StatusMessage = $"Ошибка: {ex.Message}";
-            }
-            finally
-            {
-                IsLoading = false;
-            }
+            StatusMessage = "Готово";
+            SimpleLogger.Log("LoadInitialDataAsync completed successfully");
         }
+        catch (Exception ex)
+        {
+            SimpleLogger.Error("LoadInitialDataAsync failed", ex);
+            StatusMessage = $"Ошибка: {ex.Message}";
+        }
+        finally
+        {
+            IsLoading = false;
+        }
+    }
 
         /// <summary>
         /// Поиск семейств с текущими фильтрами
@@ -378,8 +393,8 @@ namespace BIMHubPlugin.ViewModels
         {
             try
             {
+                SimpleLogger.Log($"LoadPageAsync started - Page {CurrentPage}");
                 IsLoading = true;
-                StatusMessage = "Загрузка...";
 
                 var filter = new FilterOptions
                 {
@@ -394,8 +409,10 @@ namespace BIMHubPlugin.ViewModels
 
                 var result = await _apiClient.GetFamiliesAsync(filter);
 
-                // Обновляем UI
-                System.Windows.Application.Current.Dispatcher.Invoke(() =>
+                SimpleLogger.Log($"Received {result.Items.Count} families");
+
+                // Обновляем через Dispatcher
+                _dispatcher.Invoke(() =>
                 {
                     Families.Clear();
                     foreach (var family in result.Items)
@@ -408,13 +425,15 @@ namespace BIMHubPlugin.ViewModels
                 StatusMessage = result.TotalCount > 0 
                     ? $"Найдено: {result.TotalCount}" 
                     : "Ничего не найдено";
+                
+                SimpleLogger.Log($"LoadPageAsync completed - Total: {result.TotalCount}");
             }
             catch (Exception ex)
             {
+                SimpleLogger.Error("LoadPageAsync failed", ex);
                 StatusMessage = $"Ошибка: {ex.Message}";
-                
-                // В случае ошибки очищаем список
-                System.Windows.Application.Current.Dispatcher.Invoke(() =>
+            
+                _dispatcher.Invoke(() =>
                 {
                     Families.Clear();
                     TotalPages = 0;
@@ -523,5 +542,7 @@ namespace BIMHubPlugin.ViewModels
         }
 
         #endregion
+        
+        
     }
 }

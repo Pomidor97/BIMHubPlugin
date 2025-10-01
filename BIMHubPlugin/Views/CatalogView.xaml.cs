@@ -37,18 +37,19 @@ namespace BIMHubPlugin.Views
                     return;
                 }
 
-                // Получаем конфигурацию
                 var config = Services.ConfigService.LoadConfig();
-
-                // Создаем сервисы
                 var apiClient = new Services.CatalogApiClient(config.ApiBaseUrl, config.ApiToken);
                 var cacheService = new Services.CacheService(Services.ConfigService.GetCacheFolder(), config.CacheSizeMB);
                 var loaderService = new Services.FamilyLoaderService(apiClient, cacheService, _uiApp);
+        
+                // Передаем Dispatcher из View
+                var viewModel = new ViewModels.CatalogViewModel(
+                    apiClient, 
+                    loaderService, 
+                    cacheService, 
+                    this.Dispatcher  // Передаем Dispatcher
+                );
 
-                // Создаем ViewModel
-                var viewModel = new ViewModels.CatalogViewModel(apiClient, loaderService, cacheService);
-
-                // Устанавливаем DataContext
                 DataContext = viewModel;
             }
             catch (Exception ex)
