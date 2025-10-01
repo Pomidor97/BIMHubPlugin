@@ -1,0 +1,18 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net8.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <Reference Include="RevitAPI">
+        <HintPath>..\..\API\RevitAPI.dll</HintPath>
+      </Reference>
+      <Reference Include="RevitAPIUI">
+        <HintPath>..\..\API\RevitAPIUI.dll</HintPath>
+      </Reference>
+    </ItemGroup>
+
+</Project>
