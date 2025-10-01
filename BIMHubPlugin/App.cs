@@ -1,30 +1,27 @@
-﻿using Autodesk.Revit.UI;
-using System;
+﻿using System;
 using System.Reflection;
 using System.Windows.Media.Imaging;
-using BIMHubPlugin.Views;
+using Autodesk.Revit.UI;
 
 namespace BIMHubPlugin
 {
-    public class App: IExternalApplication
+    public class App : IExternalApplication
     {
-        private static CatalogView _catalogView;
-        private static DockablePaneId _dockablePaneId = 
-            new DockablePaneId(new Guid("A7B3C8D9-1234-5678-90AB-CDEF12345678"));
+        private static DockablePaneId _dockablePaneId = new DockablePaneId(new Guid("A7B3C8D9-1234-5678-90AB-CDEF12345678"));
+        private static CatalogPaneProvider _catalogProvider;
+
         public Result OnStartup(UIControlledApplication application)
         {
             try
             {
-                RegisterDocalblePane(application);
-                
-                CreatRibbonPanel(application);
-                
+                RegisterDockablePane(application);
+                CreateRibbonTab(application);
                 return Result.Succeeded;
             }
-            catch (Exception e)
+            catch (Exception ex)
             {
-                Console.WriteLine(e);
-                throw;
+                TaskDialog.Show("Ошибка запуска плагина", ex.Message);
+                return Result.Failed;
             }
         }
 
@@ -33,43 +30,72 @@ namespace BIMHubPlugin
             return Result.Succeeded;
         }
 
-        private void RegisterDocalblePane(UIControlledApplication application)
+        private void RegisterDockablePane(UIControlledApplication application)
         {
-            _catalogView = new CatalogView();
-            application.RegisterDockablePane(
-                _dockablePaneId,
-                "BIMHub Plugin",
-                _catalogView);
+            _catalogProvider = new CatalogPaneProvider();
+            application.RegisterDockablePane(_dockablePaneId, "BIMHubPlugin", _catalogProvider);
         }
 
-        private void CreatRibbonPanel(UIControlledApplication application)
+        private void CreateRibbonTab(UIControlledApplication application)
         {
             string tabName = "KAZGOR";
+            
+            try
+            {
+                application.CreateRibbonTab(tabName);
+            }
+            catch { }
 
-            try { application.CreateRibbonTab(tabName); }
-            catch {}
-            
-            RibbonPanel panel = application.CreateRibbonPanel(tabName, "Catalog");
-            
+            RibbonPanel panel = application.CreateRibbonPanel(tabName, "BIMHub");
             string assemblyPath = Assembly.GetExecutingAssembly().Location;
+            
             PushButtonData buttonData = new PushButtonData(
                 "ShowCatalog",
-                "Открыть\nКаталог",
+                "Каталог семейств",
                 assemblyPath,
-                "BimManagerRevitPlugin.Commands.ShowCatalogCommand"
+                "BIMHubPlugin.Commands.ShowCatalogCommand"
             );
 
-            Uri iconUri = new Uri("BIMHubPlugin/Resources/KAZGOR FM_LOGO_32x32.png");
+            Uri iconUri = new Uri("pack://application:,,,/BIMHubPlugin;component/Resources/icon.png");
             buttonData.LargeImage = new BitmapImage(iconUri);
-            
-            buttonData.ToolTip = "ShowCatalog";
-            
+            buttonData.ToolTip = "Открыть каталог семейств BIMHub";
+
             panel.AddItem(buttonData);
         }
 
-        private static DockablePaneId GetDockablePaneId()
+        public static DockablePaneId GetDockablePaneId()
         {
             return _dockablePaneId;
+        }
+
+        public static CatalogPaneProvider GetCatalogProvider()
+        {
+            return _catalogProvider;
+        }
+    }
+
+    public class CatalogPaneProvider : IDockablePaneProvider
+    {
+        private Views.CatalogView _catalogView;
+
+        public void SetupDockablePane(DockablePaneProviderData data)
+        {
+            if (_catalogView == null)
+            {
+                _catalogView = new Views.CatalogView();
+            }
+
+            data.FrameworkElement = _catalogView;
+            data.InitialState = new DockablePaneState
+            {
+                DockPosition = DockPosition.Tabbed,
+                TabBehind = DockablePanes.BuiltInDockablePanes.ProjectBrowser
+            };
+        }
+
+        public Views.CatalogView GetCatalogView()
+        {
+            return _catalogView;
         }
     }
 }

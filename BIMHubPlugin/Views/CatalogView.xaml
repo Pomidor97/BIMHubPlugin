@@ -1,12 +1,273 @@
-﻿<Window x:Class="BIMHubPlugin.Views.CatalogView"
-        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-        xmlns:local="clr-namespace:BIMHubPlugin.Views"
-        mc:Ignorable="d"
-        Title="CatalogView" Height="450" Width="800">
-    <Grid>
+﻿<UserControl x:Class="BIMHubPlugin.Views.CatalogView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             mc:Ignorable="d" 
+             d:DesignHeight="600" d:DesignWidth="800"
+             Background="White">
+    
+    <UserControl.Resources>
+        <!-- Стили -->
+        <Style x:Key="FilterComboBoxStyle" TargetType="ComboBox">
+            <Setter Property="Margin" Value="5"/>
+            <Setter Property="Padding" Value="5"/>
+            <Setter Property="Height" Value="30"/>
+        </Style>
         
+        <Style x:Key="SearchTextBoxStyle" TargetType="TextBox">
+            <Setter Property="Margin" Value="5"/>
+            <Setter Property="Padding" Value="8"/>
+            <Setter Property="Height" Value="30"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
+        
+        <Style x:Key="ButtonStyle" TargetType="Button">
+            <Setter Property="Margin" Value="5"/>
+            <Setter Property="Padding" Value="10,5"/>
+            <Setter Property="Background" Value="#0078D4"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#005A9E"/>
+                </Trigger>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Background" Value="#CCCCCC"/>
+                    <Setter Property="Cursor" Value="Arrow"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- Конвертер для отображения изображений -->
+        <BooleanToVisibilityConverter x:Key="BoolToVisConverter"/>
+    </UserControl.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/> <!-- Заголовок -->
+            <RowDefinition Height="Auto"/> <!-- Поиск -->
+            <RowDefinition Height="Auto"/> <!-- Фильтры -->
+            <RowDefinition Height="*"/>    <!-- Сетка элементов -->
+            <RowDefinition Height="Auto"/> <!-- Пагинация -->
+            <RowDefinition Height="Auto"/> <!-- Статус-бар -->
+        </Grid.RowDefinitions>
+
+        <!-- Заголовок -->
+        <Border Grid.Row="0" Background="#0078D4" Padding="10">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Text="Каталог семейств BIMHub" 
+                           FontSize="18" 
+                           FontWeight="Bold" 
+                           Foreground="White"
+                           VerticalAlignment="Center"/>
+                <Button Content="🔄" 
+                        Style="{StaticResource ButtonStyle}"
+                        Command="{Binding RefreshCommand}"
+                        ToolTip="Обновить"
+                        Margin="10,0,0,0"
+                        Background="Transparent"
+                        Width="30"/>
+            </StackPanel>
+        </Border>
+
+        <!-- Поиск -->
+        <Grid Grid.Row="1" Margin="10,10,10,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <TextBox Grid.Column="0"
+                     Style="{StaticResource SearchTextBoxStyle}"
+                     Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
+                     x:Name="SearchBox">
+                <TextBox.InputBindings>
+                    <KeyBinding Key="Enter" Command="{Binding SearchCommand}"/>
+                </TextBox.InputBindings>
+            </TextBox>
+            
+            <TextBlock Grid.Column="0"
+                       Text="Поиск по названию..."
+                       Foreground="#999"
+                       Margin="13,0,0,0"
+                       VerticalAlignment="Center"
+                       IsHitTestVisible="False">
+                <TextBlock.Style>
+                    <Style TargetType="TextBlock">
+                        <Setter Property="Visibility" Value="Collapsed"/>
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding Text, ElementName=SearchBox}" Value="">
+                                <Setter Property="Visibility" Value="Visible"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBlock.Style>
+            </TextBlock>
+
+            <Button Grid.Column="1"
+                    Content="Поиск"
+                    Style="{StaticResource ButtonStyle}"
+                    Command="{Binding SearchCommand}"
+                    Width="80"/>
+            
+            <Button Grid.Column="2"
+                    Content="Очистить"
+                    Style="{StaticResource ButtonStyle}"
+                    Command="{Binding ClearFiltersCommand}"
+                    Background="#6C757D"
+                    Width="80"/>
+        </Grid>
+
+        <!-- Фильтры -->
+        <WrapPanel Grid.Row="2" Margin="10,5,10,10">
+            <ComboBox Style="{StaticResource FilterComboBoxStyle}"
+                      ItemsSource="{Binding Categories}"
+                      SelectedItem="{Binding SelectedCategory}"
+                      DisplayMemberPath="Name"
+                      Width="180"/>
+
+            <ComboBox Style="{StaticResource FilterComboBoxStyle}"
+                      ItemsSource="{Binding Sections}"
+                      SelectedItem="{Binding SelectedSection}"
+                      DisplayMemberPath="Name"
+                      Width="180"/>
+
+            <ComboBox Style="{StaticResource FilterComboBoxStyle}"
+                      ItemsSource="{Binding Manufacturers}"
+                      SelectedItem="{Binding SelectedManufacturer}"
+                      DisplayMemberPath="Name"
+                      Width="180"/>
+
+            <ComboBox Style="{StaticResource FilterComboBoxStyle}"
+                      ItemsSource="{Binding RevitVersions}"
+                      SelectedItem="{Binding SelectedRevitVersion}"
+                      DisplayMemberPath="Name"
+                      Width="120"/>
+        </WrapPanel>
+
+        <!-- Сетка элементов -->
+        <ScrollViewer Grid.Row="3" VerticalScrollBarVisibility="Auto">
+            <ItemsControl ItemsSource="{Binding Families}" Margin="10">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <WrapPanel/>
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Border Width="180" 
+                                Height="240" 
+                                Margin="10" 
+                                BorderBrush="#DDD" 
+                                BorderThickness="1"
+                                Background="White"
+                                CornerRadius="4">
+                            <Border.Effect>
+                                <DropShadowEffect ShadowDepth="2" BlurRadius="5" Opacity="0.3"/>
+                            </Border.Effect>
+
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="140"/>
+                                    <RowDefinition Height="*"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+
+                                <!-- Превью -->
+                                <Border Grid.Row="0" Background="#F5F5F5">
+                                    <Image Source="{Binding PreviewUrl}" 
+                                           Stretch="Uniform"
+                                           Margin="5"/>
+                                </Border>
+
+                                <!-- Информация -->
+                                <StackPanel Grid.Row="1" Margin="10,5">
+                                    <TextBlock Text="{Binding Name}" 
+                                               FontWeight="Bold" 
+                                               FontSize="12"
+                                               TextWrapping="Wrap"
+                                               MaxHeight="35"
+                                               TextTrimming="CharacterEllipsis"
+                                               ToolTip="{Binding Name}"/>
+                                    
+                                    <TextBlock Text="{Binding CategoryName}" 
+                                               FontSize="10" 
+                                               Foreground="#666"
+                                               Margin="0,3,0,0"/>
+                                    
+                                    <TextBlock Text="{Binding ManufacturerName}" 
+                                               FontSize="10" 
+                                               Foreground="#999"
+                                               Margin="0,2,0,0"/>
+                                </StackPanel>
+
+                                <!-- Кнопка загрузки -->
+                                <Button Grid.Row="2"
+                                        Content="Загрузить в проект"
+                                        Style="{StaticResource ButtonStyle}"
+                                        Command="{Binding DataContext.LoadFamilyCommand, 
+                                                  RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                        CommandParameter="{Binding}"
+                                        Margin="10,0,10,10"
+                                        FontSize="11"/>
+                            </Grid>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+
+        <!-- Индикатор загрузки -->
+        <Grid Grid.Row="3" 
+              Background="#80FFFFFF" 
+              Visibility="{Binding IsLoading, Converter={StaticResource BoolToVisConverter}}">
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                <TextBlock Text="⏳" FontSize="48" HorizontalAlignment="Center"/>
+                <TextBlock Text="Загрузка..." 
+                           FontSize="16" 
+                           Margin="0,10,0,0"
+                           HorizontalAlignment="Center"/>
+            </StackPanel>
+        </Grid>
+
+        <!-- Пагинация -->
+        <Grid Grid.Row="4" Margin="10" Background="#F8F9FA" Height="40">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <Button Grid.Column="0"
+                    Content="◄ Назад"
+                    Style="{StaticResource ButtonStyle}"
+                    Command="{Binding PreviousPageCommand}"
+                    Width="100"/>
+
+            <TextBlock Grid.Column="1"
+                       Text="{Binding PageInfo}"
+                       VerticalAlignment="Center"
+                       HorizontalAlignment="Center"
+                       FontSize="12"
+                       Foreground="#666"/>
+
+            <Button Grid.Column="2"
+                    Content="Вперёд ►"
+                    Style="{StaticResource ButtonStyle}"
+                    Command="{Binding NextPageCommand}"
+                    Width="100"/>
+        </Grid>
+
+        <!-- Статус-бар -->
+        <Border Grid.Row="5" Background="#E9ECEF" BorderBrush="#DDD" BorderThickness="0,1,0,0">
+            <TextBlock Text="{Binding StatusMessage}" 
+                       Margin="10,5" 
+                       FontSize="11"
+                       Foreground="#495057"/>
+        </Border>
     </Grid>
-</Window>
+</UserControl>

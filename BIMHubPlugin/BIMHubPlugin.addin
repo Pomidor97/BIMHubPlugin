@@ -1,0 +1,12 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<RevitAddIns>
+  <AddIn Type="Application">
+    <Name>BIMHub KAZGOR</Name>
+    <Assembly>BIMHubPlugin\BIMHubPlugin.dll</Assembly>
+    <FullClassName>BIMHubPlugin.App</FullClassName>
+    <ClientId>A7B3C8D9-1234-5678-90AB-CDEF12345678</ClientId>
+    <VendorId>BIMM</VendorId>
+    <VendorDescription>BIMHub, https://bimhub.kazgor.kz</VendorDescription>
+    <Description>Каталог семейств BIMHub KAZGOR для Revit 2023</Description>
+  </AddIn>
+</RevitAddIns>
