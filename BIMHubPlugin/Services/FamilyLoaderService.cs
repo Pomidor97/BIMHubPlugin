@@ -7,9 +7,7 @@ using BIMHubPlugin.Models;
 
 namespace BIMHubPlugin.Services
 {
-    /// <summary>
-    /// Сервис для загрузки семейств (координирует скачивание и импорт в Revit)
-    /// </summary>
+
     public class FamilyLoaderService
     {
         private readonly CatalogApiClient _apiClient;
@@ -22,27 +20,32 @@ namespace BIMHubPlugin.Services
             _apiClient = apiClient ?? throw new ArgumentNullException(nameof(apiClient));
             _cacheService = cacheService ?? throw new ArgumentNullException(nameof(cacheService));
 
-            // Создаем IExternalEvent для потокобезопасной загрузки в Revit
             _eventHandler = new FamilyLoadExternalEvent();
             _externalEvent = ExternalEvent.Create(_eventHandler);
         }
 
-        /// <summary>
-        /// Загрузить семейство: скачать файл и импортировать в Revit
-        /// </summary>
-        /// <param name="family">Элемент каталога</param>
-        /// <param name="progressCallback">Callback для отображения прогресса</param>
-        /// <param name="completionCallback">Callback завершения (success, message)</param>
+  
         public async Task LoadFamilyAsync(
-            FamilyItem family,
-            Action<string> progressCallback,
-            Action<bool, string> completionCallback)
+        FamilyItem family,
+        Action<string> progressCallback,
+        Action<bool, string> completionCallback,
+        bool showDialog = true)
         {
             try
             {
+                SimpleLogger.Log($"LoadFamilyAsync: Starting load for family '{family.Name}' (NameRfa: '{family.NameRfa}')");
+                SimpleLogger.Log($"LoadFamilyAsync: Show dialog mode: {showDialog}");
+                
+                if (string.IsNullOrEmpty(family.DownloadUrl))
+                {
+                    SimpleLogger.Log($"LoadFamilyAsync: ERROR - DownloadUrl is null or empty");
+                    completionCallback?.Invoke(false, $"У семейства '{family.Name}' отсутствует ссылка на файл");
+                    return;
+                }
+                
                 progressCallback?.Invoke("Скачивание файла...");
 
-                // 1. Проверяем кэш
+                SimpleLogger.Log($"LoadFamilyAsync: Checking cache for URL: {family.DownloadUrl}");
                 string cachedPath = _cacheService.GetCachedFilePath(family.DownloadUrl);
 
                 string localFilePath;
@@ -50,33 +53,44 @@ namespace BIMHubPlugin.Services
                 if (cachedPath != null)
                 {
                     localFilePath = cachedPath;
+                    SimpleLogger.Log($"LoadFamilyAsync: File found in cache: {localFilePath}");
                     progressCallback?.Invoke("Файл найден в кэше");
                 }
                 else
                 {
-                    // 2. Скачиваем файл
+                    SimpleLogger.Log("LoadFamilyAsync: File not in cache, downloading...");
+                    
                     using (var stream = await _apiClient.DownloadFamilyFileAsync(family.DownloadUrl))
                     {
                         progressCallback?.Invoke("Сохранение файла...");
+                        SimpleLogger.Log("LoadFamilyAsync: Download completed, saving to cache...");
 
-                        // Сохраняем в кэш
                         string extension = Path.GetExtension(family.MainFile);
+                        SimpleLogger.Log($"LoadFamilyAsync: File extension: {extension}");
+                        
                         localFilePath = await _cacheService.SaveToCacheAsync(
                             family.DownloadUrl,
                             stream,
                             extension
                         );
+                        
+                        SimpleLogger.Log($"LoadFamilyAsync: File saved to: {localFilePath}");
                     }
                 }
 
                 progressCallback?.Invoke("Загрузка в Revit...");
+                SimpleLogger.Log($"LoadFamilyAsync: Loading into Revit with file: {localFilePath}");
 
-                // 3. Загружаем в Revit через IExternalEvent (в главном потоке!)
-                _eventHandler.SetLoadData(localFilePath, completionCallback);
-                _externalEvent.Raise(); // Вызываем событие - выполнится в главном потоке Revit
+                _eventHandler.SetLoadData(localFilePath, family.NameRfa, completionCallback, showDialog);
+                
+                SimpleLogger.Log("LoadFamilyAsync: Raising ExternalEvent...");
+                _externalEvent.Raise();
+                
+                SimpleLogger.Log("LoadFamilyAsync: ExternalEvent raised successfully");
             }
             catch (Exception ex)
             {
+                SimpleLogger.Error($"LoadFamilyAsync failed for family '{family.Name}'", ex);
                 completionCallback?.Invoke(false, $"Ошибка: {ex.Message}");
             }
         }

@@ -68,94 +68,94 @@ namespace BIMHubPlugin.Services
         }
 
         /// <summary>
-/// Получить все разделы
-/// </summary>
-public async Task<List<Section>> GetSectionsAsync()
-{
-    try
-    {
-        SimpleLogger.Log($"GetSectionsAsync: Requesting {_baseUrl}/Section");
-        
-        var response = await _httpClient.GetAsync($"{_baseUrl}/Section");
-        
-        SimpleLogger.Log($"GetSectionsAsync: Status code {response.StatusCode}");
-        
-        response.EnsureSuccessStatusCode();
-        
-        var json = await response.Content.ReadAsStringAsync();
-        SimpleLogger.Log($"GetSectionsAsync: Received JSON length {json.Length}");
-        
-        var result = JsonConvert.DeserializeObject<List<Section>>(json) ?? new List<Section>();
-        SimpleLogger.Log($"GetSectionsAsync: Deserialized {result.Count} sections");
-        
-        return result;
-    }
-    catch (Exception ex)
-    {
-        SimpleLogger.Error("GetSectionsAsync failed", ex);
-        throw new Exception($"Ошибка получения разделов: {ex.Message}", ex);
-    }
-}
+        /// Получить все разделы
+        /// </summary>
+        public async Task<List<Section>> GetSectionsAsync()
+        {
+            try
+            {
+                SimpleLogger.Log($"GetSectionsAsync: Requesting {_baseUrl}/Section");
+                
+                var response = await _httpClient.GetAsync($"{_baseUrl}/Section");
+                
+                SimpleLogger.Log($"GetSectionsAsync: Status code {response.StatusCode}");
+                
+                response.EnsureSuccessStatusCode();
+                
+                var json = await response.Content.ReadAsStringAsync();
+                SimpleLogger.Log($"GetSectionsAsync: Received JSON length {json.Length}");
+                
+                var result = JsonConvert.DeserializeObject<List<Section>>(json) ?? new List<Section>();
+                SimpleLogger.Log($"GetSectionsAsync: Deserialized {result.Count} sections");
+                
+                return result;
+            }
+            catch (Exception ex)
+            {
+                SimpleLogger.Error("GetSectionsAsync failed", ex);
+                throw new Exception($"Ошибка получения разделов: {ex.Message}", ex);
+            }
+        }
 
-/// <summary>
-/// Получить производителей
-/// </summary>
-public async Task<List<Manufacturer>> GetManufacturersAsync()
-{
-    try
-    {
-        SimpleLogger.Log($"GetManufacturersAsync: Requesting {_baseUrl}/Manufacturer");
-        
-        var response = await _httpClient.GetAsync($"{_baseUrl}/Manufacturer");
-        
-        SimpleLogger.Log($"GetManufacturersAsync: Status code {response.StatusCode}");
-        
-        response.EnsureSuccessStatusCode();
-        
-        var json = await response.Content.ReadAsStringAsync();
-        SimpleLogger.Log($"GetManufacturersAsync: Received JSON length {json.Length}");
-        
-        var result = JsonConvert.DeserializeObject<List<Manufacturer>>(json) ?? new List<Manufacturer>();
-        SimpleLogger.Log($"GetManufacturersAsync: Deserialized {result.Count} manufacturers");
-        
-        return result;
-    }
-    catch (Exception ex)
-    {
-        SimpleLogger.Error("GetManufacturersAsync failed", ex);
-        throw new Exception($"Ошибка получения производителей: {ex.Message}", ex);
-    }
-}
+        /// <summary>
+        /// Получить производителей
+        /// </summary>
+        public async Task<List<Manufacturer>> GetManufacturersAsync()
+        {
+            try
+            {
+                SimpleLogger.Log($"GetManufacturersAsync: Requesting {_baseUrl}/Manufacturer");
+                
+                var response = await _httpClient.GetAsync($"{_baseUrl}/Manufacturer");
+                
+                SimpleLogger.Log($"GetManufacturersAsync: Status code {response.StatusCode}");
+                
+                response.EnsureSuccessStatusCode();
+                
+                var json = await response.Content.ReadAsStringAsync();
+                SimpleLogger.Log($"GetManufacturersAsync: Received JSON length {json.Length}");
+                
+                var result = JsonConvert.DeserializeObject<List<Manufacturer>>(json) ?? new List<Manufacturer>();
+                SimpleLogger.Log($"GetManufacturersAsync: Deserialized {result.Count} manufacturers");
+                
+                return result;
+            }
+            catch (Exception ex)
+            {
+                SimpleLogger.Error("GetManufacturersAsync failed", ex);
+                throw new Exception($"Ошибка получения производителей: {ex.Message}", ex);
+            }
+        }
 
-/// <summary>
-/// Получить версии Revit
-/// </summary>
-public async Task<List<RevitVersion>> GetRevitVersionsAsync()
-{
-    try
-    {
-        SimpleLogger.Log($"GetRevitVersionsAsync: Requesting {_baseUrl}/RevitVersion");
-        
-        var response = await _httpClient.GetAsync($"{_baseUrl}/RevitVersion");
-        
-        SimpleLogger.Log($"GetRevitVersionsAsync: Status code {response.StatusCode}");
-        
-        response.EnsureSuccessStatusCode();
-        
-        var json = await response.Content.ReadAsStringAsync();
-        SimpleLogger.Log($"GetRevitVersionsAsync: Received JSON length {json.Length}");
-        
-        var result = JsonConvert.DeserializeObject<List<RevitVersion>>(json) ?? new List<RevitVersion>();
-        SimpleLogger.Log($"GetRevitVersionsAsync: Deserialized {result.Count} versions");
-        
-        return result;
-    }
-    catch (Exception ex)
-    {
-        SimpleLogger.Error("GetRevitVersionsAsync failed", ex);
-        throw new Exception($"Ошибка получения версий Revit: {ex.Message}", ex);
-    }
-}
+        /// <summary>
+        /// Получить версии Revit
+        /// </summary>
+        public async Task<List<RevitVersion>> GetRevitVersionsAsync()
+        {
+            try
+            {
+                SimpleLogger.Log($"GetRevitVersionsAsync: Requesting {_baseUrl}/RevitVersion");
+                
+                var response = await _httpClient.GetAsync($"{_baseUrl}/RevitVersion");
+                
+                SimpleLogger.Log($"GetRevitVersionsAsync: Status code {response.StatusCode}");
+                
+                response.EnsureSuccessStatusCode();
+                
+                var json = await response.Content.ReadAsStringAsync();
+                SimpleLogger.Log($"GetRevitVersionsAsync: Received JSON length {json.Length}");
+                
+                var result = JsonConvert.DeserializeObject<List<RevitVersion>>(json) ?? new List<RevitVersion>();
+                SimpleLogger.Log($"GetRevitVersionsAsync: Deserialized {result.Count} versions");
+                
+                return result;
+            }
+            catch (Exception ex)
+            {
+                SimpleLogger.Error("GetRevitVersionsAsync failed", ex);
+                throw new Exception($"Ошибка получения версий Revit: {ex.Message}", ex);
+            }
+        }
 
         public async Task<PagedResult<FamilyItem>> GetFamiliesAsync(FilterOptions filter)
         {
@@ -195,22 +195,42 @@ public async Task<List<RevitVersion>> GetRevitVersionsAsync()
                 var json = await response.Content.ReadAsStringAsync();
                 SimpleLogger.Log($"GetFamiliesAsync: Received JSON length {json.Length}");
                 
-                SimpleLogger.Log($"GetFamiliesAsync: JSON preview: {json.Substring(0, Math.Min(500, json.Length))}");
-                
                 var result = JsonConvert.DeserializeObject<PagedResult<FamilyItem>>(json);
+                
+                if (result == null)
+                {
+                    throw new Exception("Десериализация вернула null");
+                }
+                
+                if (result.Items == null)
+                {
+                    result.Items = new List<FamilyItem>();
+                }
                 
                 SimpleLogger.Log($"GetFamiliesAsync: Deserialized {result.Items.Count} items, Total: {result.TotalCount}");
                 
                 // Дополняем URL для превью и скачивания
                 foreach (var item in result.Items)
                 {
+                    // ВАЖНО: Проверяем что MainFile не пустой
+                    if (!string.IsNullOrEmpty(item.MainFile))
+                    {
+                        item.DownloadUrl = $"http://bimhub.kazgor.kz:5058/api/files/download/{item.MainFile}";
+                        SimpleLogger.Log($"Set DownloadUrl for '{item.Name}': {item.DownloadUrl}");
+                    }
+                    else
+                    {
+                        SimpleLogger.Log($"WARNING: MainFile is empty for item '{item.Name}' (ID: {item.Id})");
+                        item.DownloadUrl = null; // Явно устанавливаем null
+                    }
+                    
                     if (!string.IsNullOrEmpty(item.PreviewFile))
                     {
                         item.PreviewUrl = $"http://bimhub.kazgor.kz:5058/api/files/preview/{item.PreviewFile}";
                     }
-                    if (!string.IsNullOrEmpty(item.MainFile))
+                    else
                     {
-                        item.DownloadUrl = $"http://bimhub.kazgor.kz:5058/api/files/download/{item.MainFile}";
+                        item.PreviewUrl = null;
                     }
                 }
                 
@@ -224,7 +244,6 @@ public async Task<List<RevitVersion>> GetRevitVersionsAsync()
                 throw new Exception($"Ошибка получения семейств: {ex.Message}", ex);
             }
         }
-
         public async Task<FamilyItem> GetFamilyByIdAsync(Guid id)
         {
             try
@@ -268,17 +287,30 @@ public async Task<List<RevitVersion>> GetRevitVersionsAsync()
         /// <summary>
         /// Скачать файл семейства (.rfa)
         /// </summary>
+        /// <summary>
+        /// Скачать файл семейства (.rfa)
+        /// </summary>
         public async Task<Stream> DownloadFamilyFileAsync(string downloadUrl)
         {
             try
             {
+                SimpleLogger.Log($"DownloadFamilyFileAsync: Starting download from {downloadUrl}");
+        
                 var response = await _httpClient.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead);
+        
+                SimpleLogger.Log($"DownloadFamilyFileAsync: Status code {response.StatusCode}");
+        
                 response.EnsureSuccessStatusCode();
-
-                return await response.Content.ReadAsStreamAsync();
+        
+                var stream = await response.Content.ReadAsStreamAsync();
+        
+                SimpleLogger.Log($"DownloadFamilyFileAsync: Stream received, CanRead: {stream.CanRead}, Length: {(stream.CanSeek ? stream.Length.ToString() : "unknown")}");
+        
+                return stream;
             }
             catch (Exception ex)
             {
+                SimpleLogger.Error($"DownloadFamilyFileAsync failed for URL: {downloadUrl}", ex);
                 throw new Exception($"Ошибка скачивания файла: {ex.Message}", ex);
             }
         }
@@ -290,13 +322,23 @@ public async Task<List<RevitVersion>> GetRevitVersionsAsync()
         {
             try
             {
+                SimpleLogger.Log($"DownloadPreviewAsync: Starting download from {previewUrl}");
+        
                 var response = await _httpClient.GetAsync(previewUrl);
+        
+                SimpleLogger.Log($"DownloadPreviewAsync: Status code {response.StatusCode}");
+        
                 response.EnsureSuccessStatusCode();
-
-                return await response.Content.ReadAsByteArrayAsync();
+        
+                var data = await response.Content.ReadAsByteArrayAsync();
+        
+                SimpleLogger.Log($"DownloadPreviewAsync: Downloaded {data.Length} bytes");
+        
+                return data;
             }
             catch (Exception ex)
             {
+                SimpleLogger.Error($"DownloadPreviewAsync failed for URL: {previewUrl}", ex);
                 throw new Exception($"Ошибка скачивания превью: {ex.Message}", ex);
             }
         }

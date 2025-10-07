@@ -57,7 +57,15 @@ namespace BIMHubPlugin.Services
         public async Task<string> SaveToCacheAsync(string url, byte[] data, string extension = null)
         {
             string key = GetCacheKey(url);
-            string fileName = key + (extension ?? ".dat");
+    
+            // Извлекаем человекочитаемое имя файла из URL
+            string fileName = GetFileNameFromUrl(url);
+            if (string.IsNullOrEmpty(fileName))
+            {
+                // Fallback на хеш если не удалось извлечь имя
+                fileName = key + (extension ?? ".dat");
+            }
+    
             string filePath = Path.Combine(_cacheFolder, fileName);
 
             // .NET Framework 4.8 - используем синхронную версию
@@ -78,7 +86,6 @@ namespace BIMHubPlugin.Services
 
             return filePath;
         }
-
         public async Task<string> SaveToCacheAsync(string url, Stream stream, string extension = null)
         {
             using (var ms = new MemoryStream())
@@ -177,6 +184,37 @@ namespace BIMHubPlugin.Services
             public long FileSize { get; set; }
             public DateTime CreatedAt { get; set; }
             public DateTime LastAccessed { get; set; }
+        }
+        
+        private string GetFileNameFromUrl(string url)
+        {
+            try
+            {
+                Uri uri = new Uri(url);
+                string fileName = Path.GetFileName(uri.LocalPath);
+        
+                // URL выглядит так: .../3a65ecd6-c70c-4112-8064-a607e5a38d9c_KAZGOR_Дверь_Двупольная.rfa
+                // Нужно убрать GUID и подчеркивание, оставить только: KAZGOR_Дверь_Двупольная.rfa
+        
+                if (!string.IsNullOrEmpty(fileName) && fileName.Contains("_"))
+                {
+                    // Ищем первое подчеркивание после 36 символов (длина GUID)
+                    int firstUnderscoreAfterGuid = fileName.IndexOf('_');
+                    if (firstUnderscoreAfterGuid > 0 && firstUnderscoreAfterGuid < 40)
+                    {
+                        // Берём всё после первого подчеркивания
+                        fileName = fileName.Substring(firstUnderscoreAfterGuid + 1);
+                    }
+                }
+        
+                SimpleLogger.Log($"GetFileNameFromUrl: Extracted '{fileName}' from '{url}'");
+                return fileName;
+            }
+            catch (Exception ex)
+            {
+                SimpleLogger.Error("GetFileNameFromUrl failed", ex);
+                return null;
+            }
         }
     }
 }

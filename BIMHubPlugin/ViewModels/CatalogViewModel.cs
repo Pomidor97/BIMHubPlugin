@@ -455,26 +455,32 @@ namespace BIMHubPlugin.ViewModels
 
             try
             {
+                SimpleLogger.Log($"CatalogViewModel.LoadFamilyAsync: Starting for '{family.Name}'");
+                
                 IsLoading = true;
                 SelectedFamily = family;
+                StatusMessage = "Инициализация..."; // ВАЖНО: инициализируем перед вызовом
 
                 await _loaderService.LoadFamilyAsync(
                     family,
                     progressMessage => 
                     {
                         // Обновляем статус в UI потоке
-                        System.Windows.Application.Current.Dispatcher.Invoke(() =>
+                        _dispatcher.Invoke(() =>
                         {
                             StatusMessage = progressMessage;
+                            SimpleLogger.Log($"Progress: {progressMessage}");
                         });
                     },
                     (success, message) =>
                     {
                         // Callback выполняется в главном потоке Revit
-                        System.Windows.Application.Current.Dispatcher.Invoke(() =>
+                        _dispatcher.Invoke(() =>
                         {
                             StatusMessage = message;
                             IsLoading = false;
+                            
+                            SimpleLogger.Log($"LoadFamily completed - Success: {success}, Message: {message}");
 
                             if (success)
                             {
@@ -500,7 +506,9 @@ namespace BIMHubPlugin.ViewModels
             }
             catch (Exception ex)
             {
-                System.Windows.Application.Current.Dispatcher.Invoke(() =>
+                SimpleLogger.Error($"CatalogViewModel.LoadFamilyAsync failed for '{family?.Name}'", ex);
+                
+                _dispatcher.Invoke(() =>
                 {
                     StatusMessage = $"Ошибка: {ex.Message}";
                     IsLoading = false;

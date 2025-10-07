@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using Newtonsoft.Json;
 
 namespace BIMHubPlugin.Models
 {
@@ -22,15 +23,24 @@ namespace BIMHubPlugin.Models
         public Guid ManufacturerId { get; set; }
         public string ManufacturerName { get; set; }
         
-        public string MainFile { get; set; }           // Имя файла .rfa
-        public string PreviewFile { get; set; }        // Имя файла превью
-        public List<string> Attachments { get; set; } = new List<string>();
+        // ИСПРАВЛЕНО: правильные названия полей из API
+        [JsonProperty("mainFileName")]
+        public string MainFile { get; set; }
+        
+        [JsonProperty("previewImageName")]
+        public string PreviewFile { get; set; }
+        
+        public List<string> AttachmentFileNames { get; set; } = new List<string>();
         
         public DateTime CreatedAt { get; set; }
         public DateTime UpdatedAt { get; set; }
+        public bool IsNew { get; set; }
 
-        // Вычисляемые свойства для UI
-        public string PreviewUrl { get; set; }         // Полный URL превью
-        public string DownloadUrl { get; set; }        // Полный URL скачивания
+        // Вычисляемые свойства для UI (не из JSON)
+        [JsonIgnore]
+        public string PreviewUrl { get; set; }
+        
+        [JsonIgnore]
+        public string DownloadUrl { get; set; }
     }
 }
