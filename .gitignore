@@ -1,1 +1,10 @@
 ﻿/BIMHubPlugin.sln.DotSettings.user
+bin/
+obj/
+.vs/
+.idea/
+*.user
+*.suo
+# Собранный инсталлятор — бинарный релизный артефакт, не исходники; пересобирается из
+# BIMHubPlugin_Setup.iss по требованию, в git не хранится.
+Output/
