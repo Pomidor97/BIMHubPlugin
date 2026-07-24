@@ -1,27 +1,31 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Threading.Tasks;
+using System.Windows.Media.Imaging;
 using BIMHubPlugin.Models;
 using Newtonsoft.Json;
 
 namespace BIMHubPlugin.Services
 {
     /// <summary>
-    /// Клиент для работы с BIMHubPlugin API
+    /// Клиент нового Catalog API BimHelpDesk (модуль Catalog, замена прежнего BimHub API —
+    /// раздел 7.1/9 плана объединения). Все эндпоинты защищены правом catalog.view — в отличие
+    /// от старого BimHub, Preview/Download больше не [AllowAnonymous], поэтому и превью,
+    /// и файлы качаются только через этот клиент с Bearer-токеном, никогда напрямую из XAML.
     /// </summary>
     public class CatalogApiClient : IDisposable
     {
         private readonly HttpClient _httpClient;
         private readonly string _baseUrl;
-        private readonly string _apiToken;
 
         public CatalogApiClient(string baseUrl, string apiToken = null)
         {
             _baseUrl = baseUrl?.TrimEnd('/') ?? throw new ArgumentNullException(nameof(baseUrl));
-            _apiToken = apiToken;
 
             _httpClient = new HttpClient
             {
@@ -29,37 +33,31 @@ namespace BIMHubPlugin.Services
                 Timeout = TimeSpan.FromMinutes(5)
             };
 
-            // Добавляем Bearer токен если есть
-            if (!string.IsNullOrEmpty(_apiToken))
+            if (!string.IsNullOrEmpty(apiToken))
             {
-                _httpClient.DefaultRequestHeaders.Authorization = 
-                    new AuthenticationHeaderValue("Bearer", _apiToken);
+                _httpClient.DefaultRequestHeaders.Authorization =
+                    new AuthenticationHeaderValue("Bearer", apiToken);
             }
         }
 
-        /// <summary>
-        /// Получить все категории
-        /// </summary>
+        /// <summary>Бросает UnauthorizedAccessException на 401 — вызывающий код перелогинивает пользователя.</summary>
+        private static void EnsureAuthorized(HttpResponseMessage response)
+        {
+            if (response.StatusCode == HttpStatusCode.Unauthorized)
+                throw new UnauthorizedAccessException("Сессия истекла или недействительна, требуется повторный вход");
+        }
+
         public async Task<List<Category>> GetCategoriesAsync()
         {
             try
             {
-                SimpleLogger.Log($"GetCategoriesAsync: Requesting {_baseUrl}/Category");
-        
-                var response = await _httpClient.GetAsync($"{_baseUrl}/Category");
-        
-                SimpleLogger.Log($"GetCategoriesAsync: Status code {response.StatusCode}");
-        
+                var response = await _httpClient.GetAsync($"{_baseUrl}/catalog/categories");
+                EnsureAuthorized(response);
                 response.EnsureSuccessStatusCode();
-        
                 var json = await response.Content.ReadAsStringAsync();
-                SimpleLogger.Log($"GetCategoriesAsync: Received JSON length {json.Length}");
-        
-                var result = JsonConvert.DeserializeObject<List<Category>>(json);
-                SimpleLogger.Log($"GetCategoriesAsync: Deserialized {result.Count} categories");
-        
-                return result;
+                return JsonConvert.DeserializeObject<List<Category>>(json) ?? new List<Category>();
             }
+            catch (UnauthorizedAccessException) { throw; }
             catch (Exception ex)
             {
                 SimpleLogger.Error("GetCategoriesAsync failed", ex);
@@ -67,29 +65,17 @@ namespace BIMHubPlugin.Services
             }
         }
 
-        /// <summary>
-        /// Получить все разделы
-        /// </summary>
         public async Task<List<Section>> GetSectionsAsync()
         {
             try
             {
-                SimpleLogger.Log($"GetSectionsAsync: Requesting {_baseUrl}/Section");
-                
-                var response = await _httpClient.GetAsync($"{_baseUrl}/Section");
-                
-                SimpleLogger.Log($"GetSectionsAsync: Status code {response.StatusCode}");
-                
+                var response = await _httpClient.GetAsync($"{_baseUrl}/catalog/sections");
+                EnsureAuthorized(response);
                 response.EnsureSuccessStatusCode();
-                
                 var json = await response.Content.ReadAsStringAsync();
-                SimpleLogger.Log($"GetSectionsAsync: Received JSON length {json.Length}");
-                
-                var result = JsonConvert.DeserializeObject<List<Section>>(json) ?? new List<Section>();
-                SimpleLogger.Log($"GetSectionsAsync: Deserialized {result.Count} sections");
-                
-                return result;
+                return JsonConvert.DeserializeObject<List<Section>>(json) ?? new List<Section>();
             }
+            catch (UnauthorizedAccessException) { throw; }
             catch (Exception ex)
             {
                 SimpleLogger.Error("GetSectionsAsync failed", ex);
@@ -97,29 +83,17 @@ namespace BIMHubPlugin.Services
             }
         }
 
-        /// <summary>
-        /// Получить производителей
-        /// </summary>
         public async Task<List<Manufacturer>> GetManufacturersAsync()
         {
             try
             {
-                SimpleLogger.Log($"GetManufacturersAsync: Requesting {_baseUrl}/Manufacturer");
-                
-                var response = await _httpClient.GetAsync($"{_baseUrl}/Manufacturer");
-                
-                SimpleLogger.Log($"GetManufacturersAsync: Status code {response.StatusCode}");
-                
+                var response = await _httpClient.GetAsync($"{_baseUrl}/catalog/manufacturers");
+                EnsureAuthorized(response);
                 response.EnsureSuccessStatusCode();
-                
                 var json = await response.Content.ReadAsStringAsync();
-                SimpleLogger.Log($"GetManufacturersAsync: Received JSON length {json.Length}");
-                
-                var result = JsonConvert.DeserializeObject<List<Manufacturer>>(json) ?? new List<Manufacturer>();
-                SimpleLogger.Log($"GetManufacturersAsync: Deserialized {result.Count} manufacturers");
-                
-                return result;
+                return JsonConvert.DeserializeObject<List<Manufacturer>>(json) ?? new List<Manufacturer>();
             }
+            catch (UnauthorizedAccessException) { throw; }
             catch (Exception ex)
             {
                 SimpleLogger.Error("GetManufacturersAsync failed", ex);
@@ -127,29 +101,17 @@ namespace BIMHubPlugin.Services
             }
         }
 
-        /// <summary>
-        /// Получить версии Revit
-        /// </summary>
         public async Task<List<RevitVersion>> GetRevitVersionsAsync()
         {
             try
             {
-                SimpleLogger.Log($"GetRevitVersionsAsync: Requesting {_baseUrl}/RevitVersion");
-                
-                var response = await _httpClient.GetAsync($"{_baseUrl}/RevitVersion");
-                
-                SimpleLogger.Log($"GetRevitVersionsAsync: Status code {response.StatusCode}");
-                
+                var response = await _httpClient.GetAsync($"{_baseUrl}/catalog/revit-versions");
+                EnsureAuthorized(response);
                 response.EnsureSuccessStatusCode();
-                
                 var json = await response.Content.ReadAsStringAsync();
-                SimpleLogger.Log($"GetRevitVersionsAsync: Received JSON length {json.Length}");
-                
-                var result = JsonConvert.DeserializeObject<List<RevitVersion>>(json) ?? new List<RevitVersion>();
-                SimpleLogger.Log($"GetRevitVersionsAsync: Deserialized {result.Count} versions");
-                
-                return result;
+                return JsonConvert.DeserializeObject<List<RevitVersion>>(json) ?? new List<RevitVersion>();
             }
+            catch (UnauthorizedAccessException) { throw; }
             catch (Exception ex)
             {
                 SimpleLogger.Error("GetRevitVersionsAsync failed", ex);
@@ -161,10 +123,8 @@ namespace BIMHubPlugin.Services
         {
             try
             {
-                SimpleLogger.Log("GetFamiliesAsync: Building query parameters");
-                
                 var queryParams = new List<string>();
-                
+
                 if (!string.IsNullOrEmpty(filter.Search))
                     queryParams.Add($"search={Uri.EscapeDataString(filter.Search)}");
                 if (filter.CategoryId.HasValue)
@@ -175,108 +135,96 @@ namespace BIMHubPlugin.Services
                     queryParams.Add($"revitVersionId={filter.RevitVersionId.Value}");
                 if (filter.SectionId.HasValue)
                     queryParams.Add($"sectionId={filter.SectionId.Value}");
-                    
+
                 queryParams.Add($"sortBy={filter.SortBy}");
                 queryParams.Add($"sortOrder={filter.SortOrder}");
                 queryParams.Add($"page={filter.Page}");
                 queryParams.Add($"pageSize={filter.PageSize}");
-                
+
                 string query = string.Join("&", queryParams);
-                string url = $"{_baseUrl}/Family?{query}";
-                
+                string url = $"{_baseUrl}/catalog/families?{query}";
+
                 SimpleLogger.Log($"GetFamiliesAsync: Requesting {url}");
-                
+
                 var response = await _httpClient.GetAsync(url);
-                
-                SimpleLogger.Log($"GetFamiliesAsync: Status code {response.StatusCode}");
-                
+                EnsureAuthorized(response);
                 response.EnsureSuccessStatusCode();
-                
+
                 var json = await response.Content.ReadAsStringAsync();
-                SimpleLogger.Log($"GetFamiliesAsync: Received JSON length {json.Length}");
-                
-                var result = JsonConvert.DeserializeObject<PagedResult<FamilyItem>>(json);
-                
-                if (result == null)
-                {
-                    throw new Exception("Десериализация вернула null");
-                }
-                
+                var result = JsonConvert.DeserializeObject<PagedResult<FamilyItem>>(json)
+                             ?? new PagedResult<FamilyItem> { Items = new List<FamilyItem>() };
+
                 if (result.Items == null)
-                {
                     result.Items = new List<FamilyItem>();
-                }
-                
-                SimpleLogger.Log($"GetFamiliesAsync: Deserialized {result.Items.Count} items, Total: {result.TotalCount}");
-                
-                // Дополняем URL для превью и скачивания
+
                 foreach (var item in result.Items)
                 {
-                    // ВАЖНО: Проверяем что MainFile не пустой
-                    if (!string.IsNullOrEmpty(item.MainFile))
-                    {
-                        item.DownloadUrl = $"http://bimhub.kazgor.kz:5058/api/files/download/{item.MainFile}";
-                        SimpleLogger.Log($"Set DownloadUrl for '{item.Name}': {item.DownloadUrl}");
-                    }
-                    else
-                    {
-                        SimpleLogger.Log($"WARNING: MainFile is empty for item '{item.Name}' (ID: {item.Id})");
-                        item.DownloadUrl = null; // Явно устанавливаем null
-                    }
-                    
-                    if (!string.IsNullOrEmpty(item.PreviewFile))
-                    {
-                        item.PreviewUrl = $"http://bimhub.kazgor.kz:5058/api/files/preview/{item.PreviewFile}";
-                    }
-                    else
-                    {
-                        item.PreviewUrl = null;
-                    }
+                    item.DownloadUrl = $"{_baseUrl}/catalog/families/{item.Id}/download";
+                    item.PreviewUrl = item.HasPreview ? $"{_baseUrl}/catalog/families/{item.Id}/preview" : null;
                 }
-                
-                SimpleLogger.Log("GetFamiliesAsync: URLs updated successfully");
-                
+
+                // Превью защищено Bearer-токеном — прямой Image.Source="{Binding PreviewUrl}"
+                // в списке карточек не сработает, поэтому качаем миниатюры сразу (страница
+                // небольшая, обычно 12 штук) и кладём готовые BitmapImage в модель.
+                await Task.WhenAll(result.Items
+                    .Where(i => i.HasPreview && !string.IsNullOrEmpty(i.PreviewUrl))
+                    .Select(LoadPreviewImageAsync));
+
+                SimpleLogger.Log($"GetFamiliesAsync: Deserialized {result.Items.Count} items, Total: {result.TotalCount}");
                 return result;
             }
+            catch (UnauthorizedAccessException) { throw; }
             catch (Exception ex)
             {
                 SimpleLogger.Error("GetFamiliesAsync failed", ex);
                 throw new Exception($"Ошибка получения семейств: {ex.Message}", ex);
             }
         }
+
+        private async Task LoadPreviewImageAsync(FamilyItem item)
+        {
+            try
+            {
+                var bytes = await DownloadPreviewAsync(item.PreviewUrl);
+
+                var image = new BitmapImage();
+                using (var ms = new MemoryStream(bytes))
+                {
+                    image.BeginInit();
+                    image.CacheOption = BitmapCacheOption.OnLoad;
+                    image.StreamSource = ms;
+                    image.EndInit();
+                }
+                image.Freeze(); // созданo вне UI-потока — фиксируем, чтобы можно было отдать в биндинг
+
+                item.PreviewImage = image;
+            }
+            catch (Exception ex)
+            {
+                // Не проваливаем всю страницу из-за одной сломанной миниатюры.
+                SimpleLogger.Error($"LoadPreviewImageAsync failed for '{item.Name}'", ex);
+            }
+        }
+
         public async Task<FamilyItem> GetFamilyByIdAsync(Guid id)
         {
             try
             {
-                string url = $"{_baseUrl}/Family/{id}";
-                
-                SimpleLogger.Log($"GetFamilyByIdAsync: Requesting {url}");
-                
+                string url = $"{_baseUrl}/catalog/families/{id}";
                 var response = await _httpClient.GetAsync(url);
-                
-                SimpleLogger.Log($"GetFamilyByIdAsync: Status code {response.StatusCode}");
-                
+                EnsureAuthorized(response);
                 response.EnsureSuccessStatusCode();
-                
+
                 var json = await response.Content.ReadAsStringAsync();
-                SimpleLogger.Log($"GetFamilyByIdAsync: Received JSON length {json.Length}");
-                
                 var item = JsonConvert.DeserializeObject<FamilyItem>(json);
-                
-                // Дополняем URL
-                if (!string.IsNullOrEmpty(item.PreviewFile))
-                {
-                    item.PreviewUrl = $"{_baseUrl}/api/files/preview/{item.PreviewFile}";
-                }
-                if (!string.IsNullOrEmpty(item.MainFile))
-                {
-                    item.DownloadUrl = $"{_baseUrl}/api/files/download/{item.MainFile}";
-                }
-                
+
+                item.DownloadUrl = $"{_baseUrl}/catalog/families/{item.Id}/download";
+                item.PreviewUrl = item.HasPreview ? $"{_baseUrl}/catalog/families/{item.Id}/preview" : null;
+
                 SimpleLogger.Log($"GetFamilyByIdAsync: Successfully loaded family '{item.Name}'");
-                
                 return item;
             }
+            catch (UnauthorizedAccessException) { throw; }
             catch (Exception ex)
             {
                 SimpleLogger.Error($"GetFamilyByIdAsync failed for ID {id}", ex);
@@ -284,30 +232,17 @@ namespace BIMHubPlugin.Services
             }
         }
 
-        /// <summary>
-        /// Скачать файл семейства (.rfa)
-        /// </summary>
-        /// <summary>
-        /// Скачать файл семейства (.rfa)
-        /// </summary>
+        /// <summary>Скачать основной файл семейства (.rfa) — считается на сервере атомарно (download_count).</summary>
         public async Task<Stream> DownloadFamilyFileAsync(string downloadUrl)
         {
             try
             {
-                SimpleLogger.Log($"DownloadFamilyFileAsync: Starting download from {downloadUrl}");
-        
                 var response = await _httpClient.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead);
-        
-                SimpleLogger.Log($"DownloadFamilyFileAsync: Status code {response.StatusCode}");
-        
+                EnsureAuthorized(response);
                 response.EnsureSuccessStatusCode();
-        
-                var stream = await response.Content.ReadAsStreamAsync();
-        
-                SimpleLogger.Log($"DownloadFamilyFileAsync: Stream received, CanRead: {stream.CanRead}, Length: {(stream.CanSeek ? stream.Length.ToString() : "unknown")}");
-        
-                return stream;
+                return await response.Content.ReadAsStreamAsync();
             }
+            catch (UnauthorizedAccessException) { throw; }
             catch (Exception ex)
             {
                 SimpleLogger.Error($"DownloadFamilyFileAsync failed for URL: {downloadUrl}", ex);
@@ -316,26 +251,20 @@ namespace BIMHubPlugin.Services
         }
 
         /// <summary>
-        /// Скачать превью изображение
+        /// Скачать превью изображение. Эндпоинт защищён (в отличие от старого BimHub, где
+        /// FilesController.Preview был [AllowAnonymous]) — поэтому картинку больше нельзя
+        /// грузить прямой WPF-биндингом Image.Source на URL, только так, через Bearer-токен.
         /// </summary>
         public async Task<byte[]> DownloadPreviewAsync(string previewUrl)
         {
             try
             {
-                SimpleLogger.Log($"DownloadPreviewAsync: Starting download from {previewUrl}");
-        
                 var response = await _httpClient.GetAsync(previewUrl);
-        
-                SimpleLogger.Log($"DownloadPreviewAsync: Status code {response.StatusCode}");
-        
+                EnsureAuthorized(response);
                 response.EnsureSuccessStatusCode();
-        
-                var data = await response.Content.ReadAsByteArrayAsync();
-        
-                SimpleLogger.Log($"DownloadPreviewAsync: Downloaded {data.Length} bytes");
-        
-                return data;
+                return await response.Content.ReadAsByteArrayAsync();
             }
+            catch (UnauthorizedAccessException) { throw; }
             catch (Exception ex)
             {
                 SimpleLogger.Error($"DownloadPreviewAsync failed for URL: {previewUrl}", ex);

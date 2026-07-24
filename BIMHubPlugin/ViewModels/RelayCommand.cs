@@ -3,37 +3,25 @@ using System.Windows.Input;
 
 namespace BIMHubPlugin.ViewModels
 {
-    /// <summary>
-    /// Простая реализация ICommand для MVVM паттерна
-    /// Позволяет связывать методы ViewModel с командами в XAML
-    /// </summary>
+   
     public class RelayCommand : ICommand
     {
         private readonly Action<object> _execute;
         private readonly Predicate<object> _canExecute;
 
-        /// <summary>
-        /// Создает новую команду
-        /// </summary>
-        /// <param name="execute">Действие для выполнения</param>
-        /// <param name="canExecute">Условие, определяющее можно ли выполнить команду (опционально)</param>
+
         public RelayCommand(Action<object> execute, Predicate<object> canExecute = null)
         {
             _execute = execute ?? throw new ArgumentNullException(nameof(execute));
             _canExecute = canExecute;
         }
 
-        /// <summary>
-        /// Определяет, может ли команда выполниться в текущем состоянии
-        /// </summary>
+
         public bool CanExecute(object parameter)
         {
             return _canExecute == null || _canExecute(parameter);
         }
-
-        /// <summary>
-        /// Выполняет команду
-        /// </summary>
+        
         public void Execute(object parameter)
         {
             _execute(parameter);

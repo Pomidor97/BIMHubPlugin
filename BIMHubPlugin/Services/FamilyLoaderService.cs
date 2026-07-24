@@ -65,7 +65,13 @@ namespace BIMHubPlugin.Services
                         progressCallback?.Invoke("Сохранение файла...");
                         SimpleLogger.Log("LoadFamilyAsync: Download completed, saving to cache...");
 
-                        string extension = Path.GetExtension(family.MainFile);
+                        // MainFileDisplayName заполняется только карточкой (GetFamilyByIdAsync) —
+                        // список её не отдаёт. Основной файл каталога всегда .rfa/.rvt/.rte
+                        // (проверяется на сервере при загрузке), .rfa — надёжный дефолт.
+                        string extension = string.IsNullOrEmpty(family.MainFileDisplayName)
+                            ? ".rfa"
+                            : Path.GetExtension(family.MainFileDisplayName);
+                        if (string.IsNullOrEmpty(extension)) extension = ".rfa";
                         SimpleLogger.Log($"LoadFamilyAsync: File extension: {extension}");
                         
                         localFilePath = await _cacheService.SaveToCacheAsync(
@@ -87,6 +93,12 @@ namespace BIMHubPlugin.Services
                 _externalEvent.Raise();
                 
                 SimpleLogger.Log("LoadFamilyAsync: ExternalEvent raised successfully");
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // Сессия истекла — пробрасываем наверх, чтобы CatalogViewModel показал логин заново,
+                // а не просто вывел это как обычную ошибку загрузки.
+                throw;
             }
             catch (Exception ex)
             {

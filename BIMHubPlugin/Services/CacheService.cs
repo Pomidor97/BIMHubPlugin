@@ -57,15 +57,15 @@ namespace BIMHubPlugin.Services
         public async Task<string> SaveToCacheAsync(string url, byte[] data, string extension = null)
         {
             string key = GetCacheKey(url);
-    
-            // Извлекаем человекочитаемое имя файла из URL
-            string fileName = GetFileNameFromUrl(url);
-            if (string.IsNullOrEmpty(fileName))
-            {
-                // Fallback на хеш если не удалось извлечь имя
-                fileName = key + (extension ?? ".dat");
-            }
-    
+
+            // Имя файла в кэше — всегда хеш URL. Новый Catalog API отдаёт скачивание по
+            // семейство-ориентированному эндпоинту (.../families/{id}/download), а не по
+            // прямому имени файла как старый BimHub, поэтому "красивое" имя из URL больше
+            // не извлечь — а главное, оно было бы одинаковым для всех семейств (последний
+            // сегмент URL — всегда "download"), что раньше приводило бы к перезаписи кэша
+            // одного семейства файлом другого.
+            string fileName = key + (string.IsNullOrEmpty(extension) ? ".dat" : extension);
+
             string filePath = Path.Combine(_cacheFolder, fileName);
 
             // .NET Framework 4.8 - используем синхронную версию
@@ -184,37 +184,6 @@ namespace BIMHubPlugin.Services
             public long FileSize { get; set; }
             public DateTime CreatedAt { get; set; }
             public DateTime LastAccessed { get; set; }
-        }
-        
-        private string GetFileNameFromUrl(string url)
-        {
-            try
-            {
-                Uri uri = new Uri(url);
-                string fileName = Path.GetFileName(uri.LocalPath);
-        
-                // URL выглядит так: .../3a65ecd6-c70c-4112-8064-a607e5a38d9c_KAZGOR_Дверь_Двупольная.rfa
-                // Нужно убрать GUID и подчеркивание, оставить только: KAZGOR_Дверь_Двупольная.rfa
-        
-                if (!string.IsNullOrEmpty(fileName) && fileName.Contains("_"))
-                {
-                    // Ищем первое подчеркивание после 36 символов (длина GUID)
-                    int firstUnderscoreAfterGuid = fileName.IndexOf('_');
-                    if (firstUnderscoreAfterGuid > 0 && firstUnderscoreAfterGuid < 40)
-                    {
-                        // Берём всё после первого подчеркивания
-                        fileName = fileName.Substring(firstUnderscoreAfterGuid + 1);
-                    }
-                }
-        
-                SimpleLogger.Log($"GetFileNameFromUrl: Extracted '{fileName}' from '{url}'");
-                return fileName;
-            }
-            catch (Exception ex)
-            {
-                SimpleLogger.Error("GetFileNameFromUrl failed", ex);
-                return null;
-            }
         }
     }
 }
