@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows.Input;
+using Autodesk.Revit.ApplicationServices;
 using BIMHubPlugin.Models;
 using BIMHubPlugin.Services;
 
@@ -18,6 +19,9 @@ namespace BIMHubPlugin.ViewModels
         private readonly FamilyLoaderService _loaderService;
         private readonly CacheService _cacheService;
         private readonly System.Windows.Threading.Dispatcher _dispatcher;
+        // Токен истёк/недействителен (сервер вернул 401) — сбрасываем кэш и просим войти заново
+        // (раздел 7.2/10 плана: полноценная обработка истечения сессии вместо "просто ошибка").
+        private readonly Action _onUnauthorized;
 
         // Фильтры
         private string _searchText;
@@ -45,15 +49,17 @@ namespace BIMHubPlugin.ViewModels
         private FamilyItem _selectedFamily;
 
         public CatalogViewModel(
-            CatalogApiClient apiClient, 
-            FamilyLoaderService loaderService, 
+            CatalogApiClient apiClient,
+            FamilyLoaderService loaderService,
             CacheService cacheService,
-            System.Windows.Threading.Dispatcher dispatcher)
+            System.Windows.Threading.Dispatcher dispatcher,
+            Action onUnauthorized = null)
         {
             _apiClient = apiClient ?? throw new ArgumentNullException(nameof(apiClient));
             _loaderService = loaderService ?? throw new ArgumentNullException(nameof(loaderService));
             _cacheService = cacheService ?? throw new ArgumentNullException(nameof(cacheService));
             _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
+            _onUnauthorized = onUnauthorized;
 
             // Инициализация коллекций
             Families = new ObservableCollection<FamilyItem>();
@@ -310,7 +316,7 @@ namespace BIMHubPlugin.ViewModels
                     Categories.Add(cat);
 
                 Sections.Clear();
-                Sections.Add(new Section { Id = Guid.Empty, Name = "Все разделы" });
+                Sections.Add(new Section { Id = Guid.Empty, Name = "Все подкатегории" });
                 foreach (var sec in sectionsTask.Result)
                     Sections.Add(sec);
 
@@ -336,6 +342,11 @@ namespace BIMHubPlugin.ViewModels
 
             StatusMessage = "Готово";
             SimpleLogger.Log("LoadInitialDataAsync completed successfully");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            StatusMessage = "Сессия истекла, требуется повторный вход";
+            _onUnauthorized?.Invoke();
         }
         catch (Exception ex)
         {
@@ -428,11 +439,16 @@ namespace BIMHubPlugin.ViewModels
                 
                 SimpleLogger.Log($"LoadPageAsync completed - Total: {result.TotalCount}");
             }
+            catch (UnauthorizedAccessException)
+            {
+                StatusMessage = "Сессия истекла, требуется повторный вход";
+                _onUnauthorized?.Invoke();
+            }
             catch (Exception ex)
             {
                 SimpleLogger.Error("LoadPageAsync failed", ex);
                 StatusMessage = $"Ошибка: {ex.Message}";
-            
+
                 _dispatcher.Invoke(() =>
                 {
                     Families.Clear();
@@ -504,10 +520,19 @@ namespace BIMHubPlugin.ViewModels
                     }
                 );
             }
+            catch (UnauthorizedAccessException)
+            {
+                _dispatcher.Invoke(() =>
+                {
+                    StatusMessage = "Сессия истекла, требуется повторный вход";
+                    IsLoading = false;
+                });
+                _onUnauthorized?.Invoke();
+            }
             catch (Exception ex)
             {
                 SimpleLogger.Error($"CatalogViewModel.LoadFamilyAsync failed for '{family?.Name}'", ex);
-                
+
                 _dispatcher.Invoke(() =>
                 {
                     StatusMessage = $"Ошибка: {ex.Message}";

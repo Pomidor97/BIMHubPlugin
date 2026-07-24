@@ -1,9 +1,8 @@
-﻿using System;
+using System;
 using System.Windows;
 using System.Windows.Controls;
 using Autodesk.Revit.UI;
 using BIMHubPlugin.Services;
-using BIMHubPlugin.ViewModels;
 
 namespace BIMHubPlugin.Views
 {
@@ -38,16 +37,31 @@ namespace BIMHubPlugin.Views
                 }
 
                 var config = Services.ConfigService.LoadConfig();
-                var apiClient = new Services.CatalogApiClient(config.ApiBaseUrl, config.ApiToken);
+
+                var token = ResolveToken(config.ApiBaseUrl);
+                if (token == null)
+                {
+                    // Пользователь отменил окно логина — оставляем панель пустой,
+                    // а не падаем с ошибкой "не удалось загрузить каталог".
+                    DataContext = null;
+                    return;
+                }
+
+                var apiClient = new Services.CatalogApiClient(config.ApiBaseUrl, token);
                 var cacheService = new Services.CacheService(Services.ConfigService.GetCacheFolder(), config.CacheSizeMB);
                 var loaderService = new Services.FamilyLoaderService(apiClient, cacheService, _uiApp);
-        
-                // Передаем Dispatcher из View
+
                 var viewModel = new ViewModels.CatalogViewModel(
-                    apiClient, 
-                    loaderService, 
-                    cacheService, 
-                    this.Dispatcher  // Передаем Dispatcher
+                    apiClient,
+                    loaderService,
+                    cacheService,
+                    this.Dispatcher,
+                    onUnauthorized: () =>
+                    {
+                        // Токен истёк/отозван — чистим кэш и просим войти заново.
+                        Services.TokenStore.Clear();
+                        this.Dispatcher.BeginInvoke(new Action(InitializeViewModel));
+                    }
                 );
 
                 DataContext = viewModel;
@@ -61,6 +75,30 @@ namespace BIMHubPlugin.Views
                     MessageBoxImage.Error
                 );
             }
+        }
+
+        /// <summary>
+        /// Токен из локального DPAPI-кэша (если относится к текущему ApiBaseUrl), иначе —
+        /// диалог логина через AD (раздел 7.2/10 плана: полноценный логин вместо ручного
+        /// редактирования токена в открытом config.json). Null — пользователь отменил вход.
+        /// </summary>
+        private string ResolveToken(string apiBaseUrl)
+        {
+            var cached = Services.TokenStore.Load();
+            if (cached != null
+                && string.Equals(cached.ApiBaseUrl, apiBaseUrl, StringComparison.OrdinalIgnoreCase)
+                && !string.IsNullOrEmpty(cached.Token))
+            {
+                return cached.Token;
+            }
+
+            var owner = Application.Current?.MainWindow;
+            var login = new LoginWindow(apiBaseUrl);
+            if (owner != null && !ReferenceEquals(owner, login))
+                login.Owner = owner;
+
+            var ok = login.ShowDialog();
+            return ok == true ? login.Result.Token : null;
         }
     }
 }
