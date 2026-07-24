@@ -7,6 +7,7 @@ using System.Windows.Input;
 using Autodesk.Revit.ApplicationServices;
 using BIMHubPlugin.Models;
 using BIMHubPlugin.Services;
+using BIMHubPlugin.Views;
 
 namespace BIMHubPlugin.ViewModels
 {
@@ -76,10 +77,66 @@ namespace BIMHubPlugin.ViewModels
             PreviousPageCommand = new RelayCommand(async _ => await PreviousPageAsync(), _ => CurrentPage > 1 && !IsLoading);
             ClearFiltersCommand = new RelayCommand(_ => ClearFilters());
             RefreshCommand = new RelayCommand(async _ => await LoadInitialDataAsync());
+            OpenFamilyDetailsCommand = new RelayCommand(
+                param => OpenFamilyDetails(param as FamilyItem),
+                param => param is FamilyItem && !IsLoading
+            );
+
 
             // Загружаем начальные данные
             Task.Run(async () => await LoadInitialDataAsync());
         }
+
+        private async void OpenFamilyDetails(FamilyItem family)
+        {
+            if (family == null)
+                return;
+
+            // Список (FamilyListItemDto) не содержит Description/MainFileDisplayName/Attachments —
+            // это поля только карточки (FamilyDetailDto), поэтому перед открытием окна деталей
+            // подгружаем полную запись по Id.
+            FamilyItem detail;
+            try
+            {
+                detail = await _apiClient.GetFamilyByIdAsync(family.Id);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                StatusMessage = "Сессия истекла, требуется повторный вход";
+                _onUnauthorized?.Invoke();
+                return;
+            }
+            catch (Exception ex)
+            {
+                SimpleLogger.Error($"OpenFamilyDetails: failed to load detail for '{family.Name}'", ex);
+                StatusMessage = $"Ошибка загрузки карточки: {ex.Message}";
+                return;
+            }
+
+            _dispatcher.BeginInvoke(new Action(() =>
+            {
+                FamilyDetailsWindow window = null;
+
+                var vm = new FamilyDetailsViewModel(
+                    detail,
+                    _apiClient,
+                    closeAction: () => window?.Close(),
+                    loadAction: async () =>
+                    {
+                        window?.Close();
+                        await LoadFamilyAsync(detail);
+                    });
+
+                window = new FamilyDetailsWindow
+                {
+                    DataContext = vm
+                };
+
+                window.ShowDialog();
+            }));
+        }
+
+
 
         #region Properties
 
@@ -279,6 +336,8 @@ namespace BIMHubPlugin.ViewModels
         public ICommand PreviousPageCommand { get; }
         public ICommand ClearFiltersCommand { get; }
         public ICommand RefreshCommand { get; }
+        public ICommand OpenFamilyDetailsCommand { get; }
+
 
         #endregion
 

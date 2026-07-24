@@ -85,7 +85,6 @@
                      Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
                      x:Name="SearchBox"
                      Height="40">
-                     
                 <TextBox.InputBindings>
                     <KeyBinding Key="Enter" Command="{Binding SearchCommand}"/>
                 </TextBox.InputBindings>
@@ -94,7 +93,7 @@
             <TextBlock Grid.Column="0"
                        Text="Поиск по названию..."
                        Foreground="#999"
-                       Margin="13,0,0,0"
+                       Margin="15,0,0,0"
                        VerticalAlignment="Center"
                        IsHitTestVisible="False">
                 <TextBlock.Style>
@@ -151,89 +150,126 @@
         </WrapPanel>
 
         <!-- Сетка элементов -->
-        <ScrollViewer Grid.Row="3" VerticalScrollBarVisibility="Auto">
-            <ItemsControl ItemsSource="{Binding Families}" Margin="10">
-                <ItemsControl.ItemsPanel>
-                    <ItemsPanelTemplate>
-                        <WrapPanel/>
-                    </ItemsPanelTemplate>
-                </ItemsControl.ItemsPanel>
+        <Grid Grid.Row="3">
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <ItemsControl ItemsSource="{Binding Families}" Margin="10">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <WrapPanel/>
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
 
-                <ItemsControl.ItemTemplate>
-                    <DataTemplate>
-                        <Border Width="180" 
-                                Height="240" 
-                                Margin="10" 
-                                BorderBrush="#DDD" 
-                                BorderThickness="1"
-                                Background="White"
-                                CornerRadius="4">
-                            <Border.Effect>
-                                <DropShadowEffect ShadowDepth="2" BlurRadius="5" Opacity="0.3"/>
-                            </Border.Effect>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Width="180" 
+                                    Height="300" 
+                                    Margin="10" 
+                                    BorderBrush="#DDD" 
+                                    BorderThickness="1"
+                                    Background="White"
+                                    CornerRadius="4"
+                                    RenderTransformOrigin="0.5,0.5">
+                                <Border.Effect>
+                                    <DropShadowEffect ShadowDepth="2" BlurRadius="5" Opacity="0.3"/>
+                                </Border.Effect>
 
-                            <Grid>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="140"/>
-                                    <RowDefinition Height="*"/>
-                                    <RowDefinition Height="Auto"/>
-                                </Grid.RowDefinitions>
+                                <Border.RenderTransform>
+                                    <ScaleTransform ScaleX="1" ScaleY="1"/>
+                                </Border.RenderTransform>
 
-                                <!-- Превью -->
-                                <Border Grid.Row="0" Background="#F5F5F5">
-                                    <Image Source="{Binding PreviewUrl}" 
-                                           Stretch="Uniform"
-                                           Margin="5"/>
-                                </Border>
+                                <Border.Style>
+                                    <Style TargetType="Border">
+                                        <Style.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter Property="Effect">
+                                                    <Setter.Value>
+                                                        <DropShadowEffect ShadowDepth="4" BlurRadius="10" Opacity="0.5"/>
+                                                    </Setter.Value>
+                                                </Setter>
+                                                <Setter Property="RenderTransform">
+                                                    <Setter.Value>
+                                                        <ScaleTransform ScaleX="1.03" ScaleY="1.03"/>
+                                                    </Setter.Value>
+                                                </Setter>
+                                            </Trigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
 
-                                <!-- Информация -->
-                                <StackPanel Grid.Row="1" Margin="10,5">
-                                    <TextBlock Text="{Binding Name}" 
-                                               FontWeight="Bold" 
-                                               FontSize="12"
-                                               TextWrapping="Wrap"
-                                               MaxHeight="35"
-                                               TextTrimming="CharacterEllipsis"
-                                               ToolTip="{Binding Name}"/>
-                                    
-                                    <TextBlock Text="{Binding CategoryName}" 
-                                               FontSize="10" 
-                                               Foreground="#666"
-                                               Margin="0,3,0,0"/>
-                                    
-                                    <TextBlock Text="{Binding ManufacturerName}" 
-                                               FontSize="10" 
-                                               Foreground="#999"
-                                               Margin="0,2,0,0"/>
-                                </StackPanel>
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="140"/>
+                                        <RowDefinition Height="*"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
 
-                                <!-- Кнопка загрузки -->
-                                <Button Grid.Row="2"
-                                        Content="Загрузить в проект"
-                                        Style="{StaticResource ButtonStyle}"
-                                        Command="{Binding DataContext.LoadFamilyCommand, 
-                                                  RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                        CommandParameter="{Binding}"
-                                        Margin="10,0,10,10"
-                                        FontSize="11"/>
-                            </Grid>
-                        </Border>
-                    </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
-        </ScrollViewer>
+                                    <!-- Превью -->
+                                    <Border Grid.Row="0" Background="#F5F5F5">
+                                        <Image Source="{Binding PreviewImage}"
+                                               Stretch="Uniform"
+                                               Margin="5"/>
+                                    </Border>
 
-        <!-- Индикатор загрузки -->
-        <Grid Grid.Row="3" 
-              Background="#80FFFFFF" 
-              Visibility="{Binding IsLoading, Converter={StaticResource BoolToVisConverter}}">
-            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-                <TextBlock Text="⏳" FontSize="48" HorizontalAlignment="Center"/>
-                <TextBlock Text="Загрузка..." 
-                           FontSize="16" 
-                           Margin="0,10,0,0"
-                           HorizontalAlignment="Center"/>
-            </StackPanel>
+                                    <!-- Информация -->
+                                    <StackPanel Grid.Row="1" Margin="10,5">
+                                        <TextBlock Text="{Binding Name}" 
+                                                   FontWeight="Bold" 
+                                                   FontSize="12"
+                                                   TextWrapping="Wrap"
+                                                   MaxHeight="35"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   ToolTip="{Binding Name}"/>
+                                        
+                                        <TextBlock Text="{Binding CategoryName}" 
+                                                   FontSize="10" 
+                                                   Foreground="#666"
+                                                   Margin="0,3,0,0"/>
+                                        
+                                        <TextBlock Text="{Binding ManufacturerName}" 
+                                                   FontSize="10" 
+                                                   Foreground="#999"
+                                                   Margin="0,2,0,0"/>
+                                    </StackPanel>
+
+                                    <!-- Кнопка "Подробнее" -->
+                                    <Button Grid.Row="2"
+                                            Content="Подробнее"
+                                            FontSize="11"
+                                            Margin="10,5,10,0"
+                                            Style="{StaticResource ButtonStyle}"
+                                            Command="{Binding DataContext.OpenFamilyDetailsCommand,
+                                                              RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                            CommandParameter="{Binding}"/>
+
+                                    <!-- Кнопка "Загрузить в проект" -->
+                                    <Button Grid.Row="3"
+                                            Content="Загрузить в проект"
+                                            FontSize="11"
+                                            Margin="10,5,10,10"
+                                            Style="{StaticResource ButtonStyle}"
+                                            Command="{Binding DataContext.LoadFamilyCommand,
+                                                              RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                            CommandParameter="{Binding}"/>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+
+            <!-- Индикатор загрузки -->
+            <Grid Background="#80FFFFFF" 
+                  Visibility="{Binding IsLoading, Converter={StaticResource BoolToVisConverter}}"
+                  IsHitTestVisible="True">
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <TextBlock Text="⏳" FontSize="48" HorizontalAlignment="Center"/>
+                    <TextBlock Text="Загрузка..." 
+                               FontSize="16" 
+                               Margin="0,10,0,0"
+                               HorizontalAlignment="Center"/>
+                </StackPanel>
+            </Grid>
         </Grid>
 
         <!-- Пагинация -->
