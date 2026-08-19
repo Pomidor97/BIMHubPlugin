@@ -58,7 +58,8 @@ namespace BIMHubPlugin.Views
                     this.Dispatcher,
                     onUnauthorized: () =>
                     {
-                        // Токен истёк/отозван — чистим кэш и просим войти заново.
+                        // Токен истёк/отозван (401) ИЛИ пользователь сам нажал "Выход" —
+                        // в обоих случаях один и тот же эффект: чистим кэш, просим войти заново.
                         Services.TokenStore.Clear();
                         this.Dispatcher.BeginInvoke(new Action(InitializeViewModel));
                     }

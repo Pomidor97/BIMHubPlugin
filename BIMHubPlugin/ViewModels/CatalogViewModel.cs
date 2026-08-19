@@ -81,6 +81,7 @@ namespace BIMHubPlugin.ViewModels
                 param => OpenFamilyDetails(param as FamilyItem),
                 param => param is FamilyItem && !IsLoading
             );
+            LogoutCommand = new RelayCommand(_ => Logout());
 
 
             // Загружаем начальные данные
@@ -337,6 +338,7 @@ namespace BIMHubPlugin.ViewModels
         public ICommand ClearFiltersCommand { get; }
         public ICommand RefreshCommand { get; }
         public ICommand OpenFamilyDetailsCommand { get; }
+        public ICommand LogoutCommand { get; }
 
 
         #endregion
@@ -605,6 +607,23 @@ namespace BIMHubPlugin.ViewModels
                     );
                 });
             }
+        }
+
+        /// <summary>
+        /// Выйти из системы: стереть закэшированный токен (TokenStore) и снова показать окно
+        /// логина — переиспользуем тот же коллбэк, что и на истёкшей сессии (401), эффект
+        /// идентичен: "нет валидного токена → войти заново".
+        /// </summary>
+        private void Logout()
+        {
+            var confirm = System.Windows.MessageBox.Show(
+                "Выйти из системы? Потребуется повторный вход по логину и паролю AD.",
+                "Выход",
+                System.Windows.MessageBoxButton.YesNo,
+                System.Windows.MessageBoxImage.Question);
+
+            if (confirm == System.Windows.MessageBoxResult.Yes)
+                _onUnauthorized?.Invoke();
         }
 
         /// <summary>

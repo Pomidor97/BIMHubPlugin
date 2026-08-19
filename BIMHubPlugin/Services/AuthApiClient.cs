@@ -17,7 +17,10 @@ namespace BIMHubPlugin.Services
         {
             using (var client = new HttpClient { Timeout = TimeSpan.FromSeconds(30) })
             {
-                var body = JsonConvert.SerializeObject(new { username, password });
+                // longLived: true — просим сервер выпустить токен на 30 дней (JwtSettings:PluginExpiresMinutes)
+                // вместо обычных 2 часов веб-сессии. Токен кэшируется через TokenStore (DPAPI), поэтому
+                // логин по AD нужен один раз, а не каждые пару часов посреди рабочего дня в Revit.
+                var body = JsonConvert.SerializeObject(new { username, password, longLived = true });
                 var content = new StringContent(body, Encoding.UTF8, "application/json");
 
                 var url = $"{apiBaseUrl.TrimEnd('/')}/auth/login";
