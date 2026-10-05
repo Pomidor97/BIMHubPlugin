@@ -6,9 +6,11 @@ using BIMHubPlugin.Services;
 
 namespace BIMHubPlugin.Views
 {
-    public partial class CatalogView : UserControl
+    public partial class CatalogView : UserControl, IDisposable
     {
         private UIApplication _uiApp;
+        private CatalogApiClient _apiClient;
+        private bool _initializing, _reloginQueued, _disposed;
 
         public CatalogView()
         {
@@ -18,13 +20,16 @@ namespace BIMHubPlugin.Views
         public void SetUIApplication(UIApplication uiApp)
         {
             _uiApp = uiApp;
-            InitializeViewModel();
+            if (DataContext == null) InitializeViewModel();
         }
 
         private void InitializeViewModel()
         {
+            if (_initializing || _disposed) return;
+            _initializing = true;
             try
             {
+                DisposeCurrentSession();
                 if (_uiApp == null)
                 {
                     MessageBox.Show(
@@ -47,8 +52,9 @@ namespace BIMHubPlugin.Views
                     return;
                 }
 
-                var apiClient = new Services.CatalogApiClient(config.ApiBaseUrl, token);
-                var cacheService = new Services.CacheService(Services.ConfigService.GetCacheFolder(), config.CacheSizeMB);
+                var apiClient = new Services.CatalogApiClient(config.ApiBaseUrl, token, config.RequestTimeoutSeconds);
+                _apiClient = apiClient;
+                var cacheService = new Services.CacheService(Services.ConfigService.GetCacheFolder(), config.CacheSizeMB, config.CacheTTLDays);
                 var loaderService = new Services.FamilyLoaderService(apiClient, cacheService, _uiApp);
 
                 var viewModel = new ViewModels.CatalogViewModel(
@@ -60,15 +66,20 @@ namespace BIMHubPlugin.Views
                     {
                         // Токен истёк/отозван (401) ИЛИ пользователь сам нажал "Выход" —
                         // в обоих случаях один и тот же эффект: чистим кэш, просим войти заново.
+                        if (_disposed || _reloginQueued) return;
+                        _reloginQueued = true;
                         Services.TokenStore.Clear();
-                        this.Dispatcher.BeginInvoke(new Action(InitializeViewModel));
-                    }
+                        this.Dispatcher.BeginInvoke(new Action(() => { _reloginQueued = false; InitializeViewModel(); }));
+                    },
+                    pageSize: config.DefaultPageSize
                 );
 
                 DataContext = viewModel;
+                _ = viewModel.InitializeAsync();
             }
             catch (Exception ex)
             {
+                DisposeCurrentSession();
                 MessageBox.Show(
                     $"Ошибка инициализации каталога:\n{ex.Message}",
                     "Ошибка",
@@ -76,6 +87,22 @@ namespace BIMHubPlugin.Views
                     MessageBoxImage.Error
                 );
             }
+            finally { _initializing = false; }
+        }
+
+        private void DisposeCurrentSession()
+        {
+            (DataContext as IDisposable)?.Dispose();
+            DataContext = null;
+            _apiClient?.Dispose();
+            _apiClient = null;
+        }
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            DisposeCurrentSession();
         }
 
         /// <summary>

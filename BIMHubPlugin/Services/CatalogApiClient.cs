@@ -5,6 +5,7 @@ using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Media.Imaging;
 using BIMHubPlugin.Models;
@@ -12,269 +13,143 @@ using Newtonsoft.Json;
 
 namespace BIMHubPlugin.Services
 {
-    /// <summary>
-    /// Клиент нового Catalog API BimHelpDesk (модуль Catalog, замена прежнего BimHub API —
-    /// раздел 7.1/9 плана объединения). Все эндпоинты защищены правом catalog.view — в отличие
-    /// от старого BimHub, Preview/Download больше не [AllowAnonymous], поэтому и превью,
-    /// и файлы качаются только через этот клиент с Bearer-токеном, никогда напрямую из XAML.
-    /// </summary>
-    public class CatalogApiClient : IDisposable
+    public sealed class CatalogApiClient : IDisposable
     {
         private readonly HttpClient _httpClient;
         private readonly string _baseUrl;
-
-        public CatalogApiClient(string baseUrl, string apiToken = null)
+        private readonly SemaphoreSlim _previews = new SemaphoreSlim(4);
+        public CatalogApiClient(string baseUrl, string apiToken = null, int timeoutSeconds = 300)
         {
-            _baseUrl = baseUrl?.TrimEnd('/') ?? throw new ArgumentNullException(nameof(baseUrl));
-
-            _httpClient = new HttpClient
+            _baseUrl = ApiEndpoint.Normalize(baseUrl);
+            _httpClient = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false })
             {
-                BaseAddress = new Uri(_baseUrl),
-                Timeout = TimeSpan.FromMinutes(5)
+                Timeout = TimeSpan.FromSeconds(Math.Max(5, Math.Min(timeoutSeconds, 300))),
+                MaxResponseContentBufferSize = 16 * 1024 * 1024
             };
-
             if (!string.IsNullOrEmpty(apiToken))
-            {
-                _httpClient.DefaultRequestHeaders.Authorization =
-                    new AuthenticationHeaderValue("Bearer", apiToken);
-            }
+                _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiToken);
         }
-
-        /// <summary>Бросает UnauthorizedAccessException на 401 — вызывающий код перелогинивает пользователя.</summary>
-        private static void EnsureAuthorized(HttpResponseMessage response)
+        private void ValidateDownloadUrl(string url)
+        {
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
+                !uri.AbsoluteUri.StartsWith(_baseUrl + "/", StringComparison.Ordinal))
+                throw new InvalidOperationException("Ссылка на файл находится за пределами настроенного API.");
+        }
+        private static void EnsureSuccess(HttpResponseMessage response)
         {
             if (response.StatusCode == HttpStatusCode.Unauthorized)
-                throw new UnauthorizedAccessException("Сессия истекла или недействительна, требуется повторный вход");
+                throw new UnauthorizedAccessException("Сессия истекла или отозвана. Выполните вход повторно.");
+            response.EnsureSuccessStatusCode();
         }
-
-        public async Task<List<Category>> GetCategoriesAsync()
+        private async Task<T> GetAsync<T>(string path, CancellationToken ct)
         {
-            try
+            using (var response = await _httpClient.GetAsync(_baseUrl + path, ct).ConfigureAwait(false))
             {
-                var response = await _httpClient.GetAsync($"{_baseUrl}/catalog/categories");
-                EnsureAuthorized(response);
-                response.EnsureSuccessStatusCode();
-                var json = await response.Content.ReadAsStringAsync();
-                return JsonConvert.DeserializeObject<List<Category>>(json) ?? new List<Category>();
-            }
-            catch (UnauthorizedAccessException) { throw; }
-            catch (Exception ex)
-            {
-                SimpleLogger.Error("GetCategoriesAsync failed", ex);
-                throw new Exception($"Ошибка получения категорий: {ex.Message}", ex);
+                EnsureSuccess(response);
+                var json = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                ct.ThrowIfCancellationRequested();
+                return JsonConvert.DeserializeObject<T>(json);
             }
         }
+        public async Task<List<Category>> GetCategoriesAsync(CancellationToken ct = default)
+            => await GetAsync<List<Category>>("/catalog/categories", ct).ConfigureAwait(false) ?? new List<Category>();
+        public async Task<List<Section>> GetSectionsAsync(CancellationToken ct = default)
+            => await GetAsync<List<Section>>("/catalog/sections", ct).ConfigureAwait(false) ?? new List<Section>();
+        public async Task<List<Manufacturer>> GetManufacturersAsync(CancellationToken ct = default)
+            => await GetAsync<List<Manufacturer>>("/catalog/manufacturers", ct).ConfigureAwait(false) ?? new List<Manufacturer>();
+        public async Task<List<RevitVersion>> GetRevitVersionsAsync(CancellationToken ct = default)
+            => await GetAsync<List<RevitVersion>>("/catalog/revit-versions", ct).ConfigureAwait(false) ?? new List<RevitVersion>();
 
-        public async Task<List<Section>> GetSectionsAsync()
+        public async Task<PagedResult<FamilyItem>> GetFamiliesAsync(FilterOptions filter, CancellationToken ct = default)
         {
-            try
-            {
-                var response = await _httpClient.GetAsync($"{_baseUrl}/catalog/sections");
-                EnsureAuthorized(response);
-                response.EnsureSuccessStatusCode();
-                var json = await response.Content.ReadAsStringAsync();
-                return JsonConvert.DeserializeObject<List<Section>>(json) ?? new List<Section>();
-            }
-            catch (UnauthorizedAccessException) { throw; }
-            catch (Exception ex)
-            {
-                SimpleLogger.Error("GetSectionsAsync failed", ex);
-                throw new Exception($"Ошибка получения разделов: {ex.Message}", ex);
-            }
+            var query = new List<string>();
+            if (!string.IsNullOrWhiteSpace(filter.Search)) query.Add("search=" + Uri.EscapeDataString(filter.Search));
+            if (filter.CategoryId.HasValue) query.Add("categoryId=" + filter.CategoryId);
+            if (filter.ManufacturerId.HasValue) query.Add("manufacturerId=" + filter.ManufacturerId);
+            if (filter.RevitVersionId.HasValue) query.Add("revitVersionId=" + filter.RevitVersionId);
+            if (filter.SectionId.HasValue) query.Add("sectionId=" + filter.SectionId);
+            query.Add("sortBy=" + Uri.EscapeDataString(filter.SortBy ?? "name"));
+            query.Add("sortOrder=" + Uri.EscapeDataString(filter.SortOrder ?? "asc"));
+            query.Add("page=" + Math.Max(1, filter.Page));
+            query.Add("pageSize=" + Math.Max(1, Math.Min(100, filter.PageSize)));
+            var result = await GetAsync<PagedResult<FamilyItem>>("/catalog/families?" + string.Join("&", query), ct).ConfigureAwait(false)
+                ?? new PagedResult<FamilyItem>();
+            result.Items = result.Items ?? new List<FamilyItem>();
+            foreach (var item in result.Items) SetUrls(item);
+            await Task.WhenAll(result.Items.Where(i => i.HasPreview).Select(i => LoadPreviewAsync(i, ct))).ConfigureAwait(false);
+            return result;
         }
-
-        public async Task<List<Manufacturer>> GetManufacturersAsync()
+        public async Task<FamilyItem> GetFamilyByIdAsync(Guid id, CancellationToken ct = default)
         {
-            try
-            {
-                var response = await _httpClient.GetAsync($"{_baseUrl}/catalog/manufacturers");
-                EnsureAuthorized(response);
-                response.EnsureSuccessStatusCode();
-                var json = await response.Content.ReadAsStringAsync();
-                return JsonConvert.DeserializeObject<List<Manufacturer>>(json) ?? new List<Manufacturer>();
-            }
-            catch (UnauthorizedAccessException) { throw; }
-            catch (Exception ex)
-            {
-                SimpleLogger.Error("GetManufacturersAsync failed", ex);
-                throw new Exception($"Ошибка получения производителей: {ex.Message}", ex);
-            }
+            var item = await GetAsync<FamilyItem>("/catalog/families/" + id, ct).ConfigureAwait(false);
+            if (item == null) throw new InvalidOperationException("Семейство не найдено.");
+            SetUrls(item);
+            return item;
         }
-
-        public async Task<List<RevitVersion>> GetRevitVersionsAsync()
+        private void SetUrls(FamilyItem item)
         {
-            try
-            {
-                var response = await _httpClient.GetAsync($"{_baseUrl}/catalog/revit-versions");
-                EnsureAuthorized(response);
-                response.EnsureSuccessStatusCode();
-                var json = await response.Content.ReadAsStringAsync();
-                return JsonConvert.DeserializeObject<List<RevitVersion>>(json) ?? new List<RevitVersion>();
-            }
-            catch (UnauthorizedAccessException) { throw; }
-            catch (Exception ex)
-            {
-                SimpleLogger.Error("GetRevitVersionsAsync failed", ex);
-                throw new Exception($"Ошибка получения версий Revit: {ex.Message}", ex);
-            }
+            item.DownloadUrl = _baseUrl + "/catalog/families/" + item.Id + "/download";
+            item.PreviewUrl = item.HasPreview ? _baseUrl + "/catalog/families/" + item.Id + "/preview" : null;
         }
-
-        public async Task<PagedResult<FamilyItem>> GetFamiliesAsync(FilterOptions filter)
+        private async Task LoadPreviewAsync(FamilyItem item, CancellationToken ct)
         {
+            await _previews.WaitAsync(ct).ConfigureAwait(false);
             try
             {
-                var queryParams = new List<string>();
-
-                if (!string.IsNullOrEmpty(filter.Search))
-                    queryParams.Add($"search={Uri.EscapeDataString(filter.Search)}");
-                if (filter.CategoryId.HasValue)
-                    queryParams.Add($"categoryId={filter.CategoryId.Value}");
-                if (filter.ManufacturerId.HasValue)
-                    queryParams.Add($"manufacturerId={filter.ManufacturerId.Value}");
-                if (filter.RevitVersionId.HasValue)
-                    queryParams.Add($"revitVersionId={filter.RevitVersionId.Value}");
-                if (filter.SectionId.HasValue)
-                    queryParams.Add($"sectionId={filter.SectionId.Value}");
-
-                queryParams.Add($"sortBy={filter.SortBy}");
-                queryParams.Add($"sortOrder={filter.SortOrder}");
-                queryParams.Add($"page={filter.Page}");
-                queryParams.Add($"pageSize={filter.PageSize}");
-
-                string query = string.Join("&", queryParams);
-                string url = $"{_baseUrl}/catalog/families?{query}";
-
-                SimpleLogger.Log($"GetFamiliesAsync: Requesting {url}");
-
-                var response = await _httpClient.GetAsync(url);
-                EnsureAuthorized(response);
-                response.EnsureSuccessStatusCode();
-
-                var json = await response.Content.ReadAsStringAsync();
-                var result = JsonConvert.DeserializeObject<PagedResult<FamilyItem>>(json)
-                             ?? new PagedResult<FamilyItem> { Items = new List<FamilyItem>() };
-
-                if (result.Items == null)
-                    result.Items = new List<FamilyItem>();
-
-                foreach (var item in result.Items)
+                var bytes = await DownloadPreviewAsync(item.PreviewUrl, ct).ConfigureAwait(false);
+                using (var stream = new MemoryStream(bytes))
                 {
-                    item.DownloadUrl = $"{_baseUrl}/catalog/families/{item.Id}/download";
-                    item.PreviewUrl = item.HasPreview ? $"{_baseUrl}/catalog/families/{item.Id}/preview" : null;
-                }
-
-                // Превью защищено Bearer-токеном — прямой Image.Source="{Binding PreviewUrl}"
-                // в списке карточек не сработает, поэтому качаем миниатюры сразу (страница
-                // небольшая, обычно 12 штук) и кладём готовые BitmapImage в модель.
-                await Task.WhenAll(result.Items
-                    .Where(i => i.HasPreview && !string.IsNullOrEmpty(i.PreviewUrl))
-                    .Select(LoadPreviewImageAsync));
-
-                SimpleLogger.Log($"GetFamiliesAsync: Deserialized {result.Items.Count} items, Total: {result.TotalCount}");
-                return result;
-            }
-            catch (UnauthorizedAccessException) { throw; }
-            catch (Exception ex)
-            {
-                SimpleLogger.Error("GetFamiliesAsync failed", ex);
-                throw new Exception($"Ошибка получения семейств: {ex.Message}", ex);
-            }
-        }
-
-        private async Task LoadPreviewImageAsync(FamilyItem item)
-        {
-            try
-            {
-                var bytes = await DownloadPreviewAsync(item.PreviewUrl);
-
-                var image = new BitmapImage();
-                using (var ms = new MemoryStream(bytes))
-                {
+                    var image = new BitmapImage();
                     image.BeginInit();
                     image.CacheOption = BitmapCacheOption.OnLoad;
-                    image.StreamSource = ms;
+                    image.DecodePixelWidth = 320;
+                    image.StreamSource = stream;
                     image.EndInit();
+                    image.Freeze();
+                    item.PreviewImage = image;
                 }
-                image.Freeze(); // созданo вне UI-потока — фиксируем, чтобы можно было отдать в биндинг
-
-                item.PreviewImage = image;
             }
-            catch (Exception ex)
-            {
-                // Не проваливаем всю страницу из-за одной сломанной миниатюры.
-                SimpleLogger.Error($"LoadPreviewImageAsync failed for '{item.Name}'", ex);
-            }
-        }
-
-        public async Task<FamilyItem> GetFamilyByIdAsync(Guid id)
-        {
-            try
-            {
-                string url = $"{_baseUrl}/catalog/families/{id}";
-                var response = await _httpClient.GetAsync(url);
-                EnsureAuthorized(response);
-                response.EnsureSuccessStatusCode();
-
-                var json = await response.Content.ReadAsStringAsync();
-                var item = JsonConvert.DeserializeObject<FamilyItem>(json);
-
-                item.DownloadUrl = $"{_baseUrl}/catalog/families/{item.Id}/download";
-                item.PreviewUrl = item.HasPreview ? $"{_baseUrl}/catalog/families/{item.Id}/preview" : null;
-
-                SimpleLogger.Log($"GetFamilyByIdAsync: Successfully loaded family '{item.Name}'");
-                return item;
-            }
+            catch (OperationCanceledException) { throw; }
             catch (UnauthorizedAccessException) { throw; }
-            catch (Exception ex)
-            {
-                SimpleLogger.Error($"GetFamilyByIdAsync failed for ID {id}", ex);
-                throw new Exception($"Ошибка получения семейства: {ex.Message}", ex);
-            }
+            catch (Exception ex) { SimpleLogger.Error("Cannot load preview " + item.Id, ex); }
+            finally { _previews.Release(); }
         }
-
-        /// <summary>Скачать основной файл семейства (.rfa) — считается на сервере атомарно (download_count).</summary>
-        public async Task<Stream> DownloadFamilyFileAsync(string downloadUrl)
+        public async Task<byte[]> DownloadPreviewAsync(string url, CancellationToken ct = default)
         {
-            try
+            ValidateDownloadUrl(url);
+            using (var response = await _httpClient.GetAsync(url, ct).ConfigureAwait(false))
             {
-                var response = await _httpClient.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead);
-                EnsureAuthorized(response);
-                response.EnsureSuccessStatusCode();
-                return await response.Content.ReadAsStreamAsync();
-            }
-            catch (UnauthorizedAccessException) { throw; }
-            catch (Exception ex)
-            {
-                SimpleLogger.Error($"DownloadFamilyFileAsync failed for URL: {downloadUrl}", ex);
-                throw new Exception($"Ошибка скачивания файла: {ex.Message}", ex);
+                EnsureSuccess(response);
+                return await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
             }
         }
-
-        /// <summary>
-        /// Скачать превью изображение. Эндпоинт защищён (в отличие от старого BimHub, где
-        /// FilesController.Preview был [AllowAnonymous]) — поэтому картинку больше нельзя
-        /// грузить прямой WPF-биндингом Image.Source на URL, только так, через Bearer-токен.
-        /// </summary>
-        public async Task<byte[]> DownloadPreviewAsync(string previewUrl)
+        public async Task DownloadToAsync(string url, Stream destination, CancellationToken ct = default)
         {
-            try
+            ValidateDownloadUrl(url);
+            using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct))
             {
-                var response = await _httpClient.GetAsync(previewUrl);
-                EnsureAuthorized(response);
-                response.EnsureSuccessStatusCode();
-                return await response.Content.ReadAsByteArrayAsync();
-            }
-            catch (UnauthorizedAccessException) { throw; }
-            catch (Exception ex)
-            {
-                SimpleLogger.Error($"DownloadPreviewAsync failed for URL: {previewUrl}", ex);
-                throw new Exception($"Ошибка скачивания превью: {ex.Message}", ex);
+                timeout.CancelAfter(_httpClient.Timeout);
+                using (var response = await _httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, timeout.Token).ConfigureAwait(false))
+                {
+                    EnsureSuccess(response);
+                    using (var source = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
+                        await source.CopyToAsync(destination, 81920, timeout.Token).ConfigureAwait(false);
+                }
             }
         }
-
+        public async Task LogoutAsync(CancellationToken ct = default)
+        {
+            using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct))
+            {
+                timeout.CancelAfter(TimeSpan.FromSeconds(5));
+                using (var response = await _httpClient.PostAsync(_baseUrl + "/auth/logout", null, timeout.Token).ConfigureAwait(false))
+                    EnsureSuccess(response);
+            }
+        }
         public void Dispose()
         {
-            _httpClient?.Dispose();
+            // In-flight preview tasks release their permits after cancellation.
+            _httpClient.Dispose();
         }
     }
 }

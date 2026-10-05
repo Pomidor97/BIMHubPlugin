@@ -3,166 +3,109 @@ using Autodesk.Revit.UI;
 using BIMHubPlugin.Services;
 using System;
 using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace BIMHubPlugin.Events
 {
-    /// <summary>
-    /// Обработчик внешнего события для загрузки семейств в Revit
-    /// </summary>
-    public class FamilyLoadExternalEvent : IExternalEventHandler
+    public sealed class FamilyLoadResult
     {
-        private string _familyFilePath;
-        private string _nameRfa;
-        private bool _showDialog;
-        private Action<bool, string> _callback;
+        public bool Success { get; }
+        public string Message { get; }
+        public FamilyLoadResult(bool success, string message) { Success = success; Message = message; }
+    }
 
-        /// <summary>
-        /// Выполняет загрузку семейства в документ Revit
-        /// </summary>
+    // Created once in IExternalApplication.OnStartup, never from a WPF dispatcher callback.
+    public sealed class FamilyLoadExternalEvent : IExternalEventHandler, IDisposable
+    {
+        private readonly object _gate = new object();
+        private readonly ExternalEvent _event;
+        private Request _pending;
+        private bool _disposed;
+        public FamilyLoadExternalEvent() => _event = ExternalEvent.Create(this);
+
+        public Task<FamilyLoadResult> LoadAsync(string path, string name, Document document, bool showDialog, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            lock (_gate)
+            {
+                if (_disposed) throw new ObjectDisposedException(nameof(FamilyLoadExternalEvent));
+                if (_pending != null) throw new InvalidOperationException("Предыдущая загрузка семейства ещё выполняется.");
+                var request = new Request(path, name, document, showDialog, ct);
+                _pending = request;
+                try
+                {
+                    var status = _event.Raise();
+                    if (status != ExternalEventRequest.Accepted && status != ExternalEventRequest.Pending)
+                        throw new InvalidOperationException("Revit не принял запрос загрузки. Повторите после завершения текущей команды.");
+                    return request.Completion.Task;
+                }
+                catch { _pending = null; throw; }
+            }
+        }
+
         public void Execute(UIApplication app)
         {
-            SimpleLogger.Log("FamilyLoadExternalEvent.Execute: Начало выполнения");
-            
-            Document doc = app.ActiveUIDocument?.Document;
-
-            if (doc == null)
-            {
-                SimpleLogger.Log("FamilyLoadExternalEvent.Execute: Нет активного документа");
-                _callback?.Invoke(false, "Нет активного документа");
-                return;
-            }
-
-            if (string.IsNullOrEmpty(_familyFilePath) || !File.Exists(_familyFilePath))
-            {
-                SimpleLogger.Log($"FamilyLoadExternalEvent.Execute: Файл не найден: {_familyFilePath}");
-                _callback?.Invoke(false, $"Файл не найден: {_familyFilePath}");
-                return;
-            }
-
-            var fileInfo = new FileInfo(_familyFilePath);
-            SimpleLogger.Log($"FamilyLoadExternalEvent.Execute: Загрузка файла: {_familyFilePath}");
-            SimpleLogger.Log($"FamilyLoadExternalEvent.Execute: Имя из БД (NameRfa): {_nameRfa}");
-            SimpleLogger.Log($"FamilyLoadExternalEvent.Execute: Показывать диалог: {_showDialog}");
-            SimpleLogger.Log($"FamilyLoadExternalEvent.Execute: Файл существует: {fileInfo.Exists}");
-            SimpleLogger.Log($"FamilyLoadExternalEvent.Execute: Размер файла: {fileInfo.Length} байт");
-            SimpleLogger.Log($"FamilyLoadExternalEvent.Execute: Расширение: {fileInfo.Extension}");
-            SimpleLogger.Log($"FamilyLoadExternalEvent.Execute: Версия Revit документа: {doc.Application.VersionNumber}");
-            
+            Request request;
+            lock (_gate) { request = _pending; }
+            if (request == null) return;
             try
             {
-                bool success = false;
-                string message = "";
-
-                using (Transaction trans = new Transaction(doc, "Загрузка семейства"))
+                request.Token.ThrowIfCancellationRequested();
+                var doc = app.ActiveUIDocument?.Document;
+                if (doc == null || !doc.IsValidObject || !doc.Equals(request.Document))
+                    throw new InvalidOperationException("Активный документ изменился. Повторите загрузку в нужном проекте.");
+                if (doc.IsReadOnly || doc.IsModifiable)
+                    throw new InvalidOperationException("Документ сейчас недоступен для изменения.");
+                if (!File.Exists(request.Path)) throw new FileNotFoundException("Файл семейства не найден.");
+                using (var transaction = new Transaction(doc, "Загрузка семейства BIMHub"))
                 {
-                    trans.Start();
-                    SimpleLogger.Log("FamilyLoadExternalEvent.Execute: Транзакция начата");
-
-                    try
+                    transaction.Start();
+                    var loaded = doc.LoadFamily(request.Path, new FamilyLoadOptions(request.ShowDialog), out var family);
+                    if (!loaded || family == null)
                     {
-                        Family family;
-                        bool loaded;
-
-                        if (_showDialog)
-                        {
-                            // Загрузка с возможностью показа диалога (стандартное поведение Revit)
-                            SimpleLogger.Log("FamilyLoadExternalEvent.Execute: Загрузка с опцией диалога");
-                            FamilyLoadOptions loadOptions = new FamilyLoadOptions(true);
-                            loaded = doc.LoadFamily(_familyFilePath, loadOptions, out family);
-                        }
-                        else
-                        {
-                            // Автоматическая замена без диалога
-                            SimpleLogger.Log("FamilyLoadExternalEvent.Execute: Автоматическая загрузка без диалога");
-                            FamilyLoadOptions loadOptions = new FamilyLoadOptions(false);
-                            loaded = doc.LoadFamily(_familyFilePath, loadOptions, out family);
-                        }
-
-                        SimpleLogger.Log($"FamilyLoadExternalEvent.Execute: LoadFamily вернул {loaded}, family == null: {family == null}");
-
-                        if (family != null)
-                        {
-                            success = true;
-                            string displayName = !string.IsNullOrEmpty(_nameRfa) ? _nameRfa : family.Name;
-        
-                            if (loaded)
-                            {
-                                message = $"Семейство '{displayName}' успешно загружено";
-                                SimpleLogger.Log($"FamilyLoadExternalEvent.Execute: Новое семейство загружено");
-                            }
-                            else
-                            {
-                                message = $"Семейство '{displayName}' обновлено";
-                                SimpleLogger.Log($"FamilyLoadExternalEvent.Execute: Существующее семейство обновлено/заменено");
-                            }
-                        }
-                        else if (!loaded)
-                        {
-                            // Пользователь отменил загрузку в диалоге или семейство идентично существующему
-                            success = false;
-                            message = "Загрузка отменена (внутренняя ошибка или семейство без изменений)";
-                            SimpleLogger.Log($"FamilyLoadExternalEvent.Execute: Загрузка отменена или семейство идентично");
-                        }
-                        else
-                        {
-                            success = false;
-                            message = "Не удалось загрузить семейство";
-                            SimpleLogger.Log($"FamilyLoadExternalEvent.Execute: ОШИБКА - неизвестная причина");
-                        }
-
-                        SimpleLogger.Log("FamilyLoadExternalEvent.Execute: Фиксация транзакции...");
-                        trans.Commit();
-                        SimpleLogger.Log("FamilyLoadExternalEvent.Execute: Транзакция зафиксирована");
+                        transaction.RollBack();
+                        request.Completion.TrySetResult(new FamilyLoadResult(false, "Загрузка отменена или семейство уже актуально."));
                     }
-                    catch (Exception ex)
+                    else
                     {
-                        SimpleLogger.Error("FamilyLoadExternalEvent.Execute: Исключение при LoadFamily", ex);
-                        trans.RollBack();
-                        success = false;
-                        message = $"Ошибка загрузки: {ex.Message}";
+                        var status = transaction.Commit();
+                        request.Completion.TrySetResult(new FamilyLoadResult(status == TransactionStatus.Committed,
+                            status == TransactionStatus.Committed ? "Семейство '" + (request.Name ?? family.Name) + "' загружено." : "Revit отменил транзакцию загрузки."));
                     }
                 }
-
-                SimpleLogger.Log($"FamilyLoadExternalEvent.Execute: Вызов callback - Успех: {success}");
-                _callback?.Invoke(success, message);
             }
+            catch (OperationCanceledException) { request.Completion.TrySetCanceled(); }
             catch (Exception ex)
             {
-                SimpleLogger.Error("FamilyLoadExternalEvent.Execute: Внешнее исключение", ex);
-                _callback?.Invoke(false, $"Ошибка: {ex.Message}");
+                SimpleLogger.Error("Revit family load failed", ex);
+                request.Completion.TrySetResult(new FamilyLoadResult(false, ex.Message));
             }
-            finally
+            finally { lock (_gate) { if (ReferenceEquals(_pending, request)) _pending = null; } }
+        }
+
+        public string GetName() => "BIMHub family loader";
+        public void Dispose()
+        {
+            lock (_gate)
             {
-                // Очистка данных после выполнения
-                _familyFilePath = null;
-                _nameRfa = null;
-                _showDialog = true;
-                _callback = null;
-                SimpleLogger.Log("FamilyLoadExternalEvent.Execute: Завершено");
+                if (_disposed) return;
+                _disposed = true;
+                _pending?.Completion.TrySetCanceled();
+                _pending = null;
+                _event.Dispose();
             }
         }
-
-        /// <summary>
-        /// Возвращает имя обработчика события
-        /// </summary>
-        public string GetName()
+        private sealed class Request
         {
-            return "FamilyLoadExternalEvent";
-        }
-
-        /// <summary>
-        /// Устанавливает данные для загрузки семейства
-        /// </summary>
-        /// <param name="familyFilePath">Путь к файлу семейства (.rfa)</param>
-        /// <param name="nameRfa">Имя семейства из базы данных</param>
-        /// <param name="callback">Callback-функция для уведомления о результате (успех, сообщение)</param>
-        /// <param name="showDialog">Показывать ли диалог Revit при замене существующего семейства (по умолчанию true)</param>
-        public void SetLoadData(string familyFilePath, string nameRfa, Action<bool, string> callback, bool showDialog = true)
-        {
-            _familyFilePath = familyFilePath;
-            _nameRfa = nameRfa;
-            _callback = callback;
-            _showDialog = showDialog;
+            public string Path { get; }
+            public string Name { get; }
+            public Document Document { get; }
+            public bool ShowDialog { get; }
+            public CancellationToken Token { get; }
+            public TaskCompletionSource<FamilyLoadResult> Completion { get; } = new TaskCompletionSource<FamilyLoadResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+            public Request(string path, string name, Document document, bool showDialog, CancellationToken token)
+            { Path = path; Name = name; Document = document; ShowDialog = showDialog; Token = token; }
         }
     }
 }

@@ -1,5 +1,6 @@
 using System;
 using System.Windows;
+using System.Threading;
 using BIMHubPlugin.Models;
 using BIMHubPlugin.Services;
 
@@ -8,6 +9,8 @@ namespace BIMHubPlugin.Views
     public partial class LoginWindow : Window
     {
         private readonly string _apiBaseUrl;
+        private readonly CancellationTokenSource _lifetime = new CancellationTokenSource();
+        private bool _closed;
 
         /// <summary>Результат успешного логина — заполнен, если DialogResult == true.</summary>
         public LoginResult Result { get; private set; }
@@ -16,10 +19,12 @@ namespace BIMHubPlugin.Views
         {
             InitializeComponent();
             _apiBaseUrl = apiBaseUrl;
+            Closed += (_, __) => { _closed = true; _lifetime.Cancel(); _lifetime.Dispose(); PasswordBox.Clear(); };
         }
 
         private async void LoginButton_Click(object sender, RoutedEventArgs e)
         {
+            if (!LoginButton.IsEnabled || _closed) return;
             var username = UsernameBox.Text?.Trim();
             var password = PasswordBox.Password;
 
@@ -34,7 +39,8 @@ namespace BIMHubPlugin.Views
 
             try
             {
-                var result = await AuthApiClient.LoginAsync(_apiBaseUrl, username, password);
+                var result = await AuthApiClient.LoginAsync(_apiBaseUrl, username, password, _lifetime.Token);
+                if (_closed) return;
 
                 TokenStore.Save(new CachedToken
                 {
@@ -47,13 +53,14 @@ namespace BIMHubPlugin.Views
                 Result = result;
                 DialogResult = true;
             }
+            catch (OperationCanceledException) when (_closed) { }
             catch (Exception ex)
             {
-                ShowError(ex.Message);
+                if (!_closed) ShowError(ex.Message);
             }
             finally
             {
-                LoginButton.IsEnabled = true;
+                if (!_closed) LoginButton.IsEnabled = true;
             }
         }
 

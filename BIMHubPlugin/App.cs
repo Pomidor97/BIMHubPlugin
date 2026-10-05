@@ -9,11 +9,16 @@ namespace BIMHubPlugin
     {
         private static DockablePaneId _dockablePaneId = new DockablePaneId(new Guid("A7B3C8D9-1234-5678-90AB-CDEF12345678"));
         private static CatalogPaneProvider _catalogProvider;
+        public static Events.FamilyLoadExternalEvent FamilyLoads { get; private set; }
+        public static Autodesk.Revit.DB.Document ActiveDocument { get; private set; }
+        public static void SetActiveDocument(Autodesk.Revit.DB.Document document) => ActiveDocument = document;
 
         public Result OnStartup(UIControlledApplication application)
         {
             try
             {
+                FamilyLoads = new Events.FamilyLoadExternalEvent();
+                application.ViewActivated += OnViewActivated;
                 RegisterDockablePane(application);
                 CreateRibbonTab(application);
                 return Result.Succeeded;
@@ -27,8 +32,15 @@ namespace BIMHubPlugin
 
         public Result OnShutdown(UIControlledApplication application)
         {
+            application.ViewActivated -= OnViewActivated;
+            _catalogProvider?.GetCatalogView()?.Dispose();
+            FamilyLoads?.Dispose();
+            ActiveDocument = null;
             return Result.Succeeded;
         }
+
+        private void OnViewActivated(object sender, Autodesk.Revit.UI.Events.ViewActivatedEventArgs e)
+            => ActiveDocument = e.CurrentActiveView?.Document;
 
         private void RegisterDockablePane(UIControlledApplication application)
         {

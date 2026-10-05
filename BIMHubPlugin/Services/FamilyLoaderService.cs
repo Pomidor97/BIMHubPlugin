@@ -1,110 +1,52 @@
 ﻿using System;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 using Autodesk.Revit.UI;
-using BIMHubPlugin.Events;
 using BIMHubPlugin.Models;
 
 namespace BIMHubPlugin.Services
 {
-
-    public class FamilyLoaderService
+    public sealed class FamilyLoaderService
     {
         private readonly CatalogApiClient _apiClient;
-        private readonly CacheService _cacheService;
-        private readonly FamilyLoadExternalEvent _eventHandler;
-        private readonly ExternalEvent _externalEvent;
+        private readonly CacheService _cache;
+        private readonly SemaphoreSlim _loading = new SemaphoreSlim(1);
+        public FamilyLoaderService(CatalogApiClient apiClient, CacheService cache, UIApplication uiApp)
+        { _apiClient = apiClient; _cache = cache; }
 
-        public FamilyLoaderService(CatalogApiClient apiClient, CacheService cacheService, UIApplication uiApp)
+        public async Task LoadFamilyAsync(FamilyItem family, Action<string> progressCallback,
+            Action<bool, string> completionCallback, bool showDialog = true, CancellationToken ct = default)
         {
-            _apiClient = apiClient ?? throw new ArgumentNullException(nameof(apiClient));
-            _cacheService = cacheService ?? throw new ArgumentNullException(nameof(cacheService));
-
-            _eventHandler = new FamilyLoadExternalEvent();
-            _externalEvent = ExternalEvent.Create(_eventHandler);
-        }
-
-  
-        public async Task LoadFamilyAsync(
-        FamilyItem family,
-        Action<string> progressCallback,
-        Action<bool, string> completionCallback,
-        bool showDialog = true)
-        {
+            if (!await _loading.WaitAsync(0, ct)) return;
             try
             {
-                SimpleLogger.Log($"LoadFamilyAsync: Starting load for family '{family.Name}' (NameRfa: '{family.NameRfa}')");
-                SimpleLogger.Log($"LoadFamilyAsync: Show dialog mode: {showDialog}");
-                
-                if (string.IsNullOrEmpty(family.DownloadUrl))
-                {
-                    SimpleLogger.Log($"LoadFamilyAsync: ERROR - DownloadUrl is null or empty");
-                    completionCallback?.Invoke(false, $"У семейства '{family.Name}' отсутствует ссылка на файл");
-                    return;
-                }
-                
+                var targetDocument = App.ActiveDocument;
+                if (targetDocument == null) throw new InvalidOperationException("Нет активного документа Revit.");
+                progressCallback?.Invoke("Проверка актуальной версии семейства...");
+                // Always recheck access and fetch the real file extension/version, even on a cache hit.
+                var detail = await _apiClient.GetFamilyByIdAsync(family.Id, ct);
+                var extension = Path.GetExtension(detail.MainFileDisplayName ?? "").ToLowerInvariant();
+                if (extension != ".rfa")
+                    throw new InvalidOperationException("В проект можно загрузить только .rfa. Файлы .rvt/.rte открываются как документы Revit.");
                 progressCallback?.Invoke("Скачивание файла...");
-
-                SimpleLogger.Log($"LoadFamilyAsync: Checking cache for URL: {family.DownloadUrl}");
-                string cachedPath = _cacheService.GetCachedFilePath(family.DownloadUrl);
-
-                string localFilePath;
-
-                if (cachedPath != null)
+                using (var lease = await _cache.AcquireAsync(detail.DownloadUrl, detail.UpdatedAt, extension,
+                    (stream, token) => _apiClient.DownloadToAsync(detail.DownloadUrl, stream, token), ct))
                 {
-                    localFilePath = cachedPath;
-                    SimpleLogger.Log($"LoadFamilyAsync: File found in cache: {localFilePath}");
-                    progressCallback?.Invoke("Файл найден в кэше");
+                    ct.ThrowIfCancellationRequested();
+                    progressCallback?.Invoke("Загрузка в Revit...");
+                    var result = await App.FamilyLoads.LoadAsync(lease.FilePath, detail.NameRfa, targetDocument, showDialog, ct);
+                    completionCallback?.Invoke(result.Success, result.Message);
                 }
-                else
-                {
-                    SimpleLogger.Log("LoadFamilyAsync: File not in cache, downloading...");
-                    
-                    using (var stream = await _apiClient.DownloadFamilyFileAsync(family.DownloadUrl))
-                    {
-                        progressCallback?.Invoke("Сохранение файла...");
-                        SimpleLogger.Log("LoadFamilyAsync: Download completed, saving to cache...");
-
-                        // MainFileDisplayName заполняется только карточкой (GetFamilyByIdAsync) —
-                        // список её не отдаёт. Основной файл каталога всегда .rfa/.rvt/.rte
-                        // (проверяется на сервере при загрузке), .rfa — надёжный дефолт.
-                        string extension = string.IsNullOrEmpty(family.MainFileDisplayName)
-                            ? ".rfa"
-                            : Path.GetExtension(family.MainFileDisplayName);
-                        if (string.IsNullOrEmpty(extension)) extension = ".rfa";
-                        SimpleLogger.Log($"LoadFamilyAsync: File extension: {extension}");
-                        
-                        localFilePath = await _cacheService.SaveToCacheAsync(
-                            family.DownloadUrl,
-                            stream,
-                            extension
-                        );
-                        
-                        SimpleLogger.Log($"LoadFamilyAsync: File saved to: {localFilePath}");
-                    }
-                }
-
-                progressCallback?.Invoke("Загрузка в Revit...");
-                SimpleLogger.Log($"LoadFamilyAsync: Loading into Revit with file: {localFilePath}");
-
-                _eventHandler.SetLoadData(localFilePath, family.NameRfa, completionCallback, showDialog);
-                
-                SimpleLogger.Log("LoadFamilyAsync: Raising ExternalEvent...");
-                _externalEvent.Raise();
-                
-                SimpleLogger.Log("LoadFamilyAsync: ExternalEvent raised successfully");
             }
-            catch (UnauthorizedAccessException)
-            {
-                // Сессия истекла — пробрасываем наверх, чтобы CatalogViewModel показал логин заново,
-                // а не просто вывел это как обычную ошибку загрузки.
-                throw;
-            }
+            catch (OperationCanceledException) { throw; }
+            catch (UnauthorizedAccessException) { throw; }
             catch (Exception ex)
             {
-                SimpleLogger.Error($"LoadFamilyAsync failed for family '{family.Name}'", ex);
-                completionCallback?.Invoke(false, $"Ошибка: {ex.Message}");
+                SimpleLogger.Error("Family load failed", ex);
+                completionCallback?.Invoke(false, ex.Message);
             }
+            finally { _loading.Release(); }
         }
     }
 }

@@ -6,6 +6,11 @@
     <PlatformTarget>x64</PlatformTarget>
     <Configurations>Debug;Release</Configurations>
     <UseWPF>true</UseWPF>
+    <RevitVersion Condition="'$(RevitVersion)' == ''">2023</RevitVersion>
+    <RevitInstallDir Condition="'$(RevitInstallDir)' == ''">C:\Program Files\Autodesk\Revit $(RevitVersion)</RevitInstallDir>
+    <OutputPath>bin\Revit$(RevitVersion)\$(Configuration)\</OutputPath>
+    <IntermediateOutputPath>obj\Revit$(RevitVersion)\$(Configuration)\</IntermediateOutputPath>
+    <DeployAddin Condition="'$(DeployAddin)' == ''">false</DeployAddin>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)'=='Debug'">
@@ -16,11 +21,11 @@
   <!-- Revit 2023 References -->
   <ItemGroup>
     <Reference Include="RevitAPI">
-      <HintPath>C:\Program Files\Autodesk\Revit 2023\RevitAPI.dll</HintPath>
+      <HintPath>$(RevitInstallDir)\RevitAPI.dll</HintPath>
       <Private>False</Private>
     </Reference>
     <Reference Include="RevitAPIUI">
-      <HintPath>C:\Program Files\Autodesk\Revit 2023\RevitAPIUI.dll</HintPath>
+      <HintPath>$(RevitInstallDir)\RevitAPIUI.dll</HintPath>
       <Private>False</Private>
     </Reference>
   </ItemGroup>
@@ -43,18 +48,22 @@
   </ItemGroup>
 
   <!-- Copy .addin file to Revit AddIns folder -->
-  <Target Name="CopyAddInFile" AfterTargets="Build">
+  <Target Name="ValidateRevitSdk" BeforeTargets="ResolveReferences">
+    <Error Condition="'$(RevitVersion)' != '2023' And '$(RevitVersion)' != '2024'" Text="Supported RevitVersion values: 2023, 2024." />
+    <Error Condition="!Exists('$(RevitInstallDir)\RevitAPI.dll')" Text="Revit API not found. Set RevitInstallDir to the installed Revit $(RevitVersion) SDK directory." />
+  </Target>
+  <Target Name="CopyAddInFile" AfterTargets="Build" Condition="'$(DeployAddin)' == 'true'">
     <Copy SourceFiles="$(ProjectDir)BIMHubPlugin.addin" 
-          DestinationFolder="$(AppData)\Autodesk\Revit\Addins\2023" />
+          DestinationFolder="$(AppData)\Autodesk\Revit\Addins\$(RevitVersion)" />
   </Target>
 
   <!-- Copy DLL to Revit AddIns folder -->
-  <Target Name="CopyDLLFiles" AfterTargets="Build">
+  <Target Name="CopyDLLFiles" AfterTargets="Build" Condition="'$(DeployAddin)' == 'true'">
     <ItemGroup>
       <FilesToCopy Include="$(OutDir)**\*.dll" />
     </ItemGroup>
     <Copy SourceFiles="@(FilesToCopy)" 
-          DestinationFolder="$(AppData)\Autodesk\Revit\Addins\2023\BIMHubPlugin" />
+          DestinationFolder="$(AppData)\Autodesk\Revit\Addins\$(RevitVersion)\BIMHubPlugin" />
   </Target>
 
 </Project>

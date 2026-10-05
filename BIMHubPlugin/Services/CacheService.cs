@@ -1,189 +1,132 @@
 ﻿using System;
-using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace BIMHubPlugin.Services
 {
-    public class CacheService
+    public sealed class CacheService
     {
-        private readonly string _cacheFolder;
-        private readonly long _maxCacheSizeBytes;
-        private readonly ConcurrentDictionary<string, CacheEntry> _cacheIndex;
+        private readonly string _root;
+        private readonly long _maxBytes;
+        private readonly TimeSpan _ttl;
+        private readonly Func<DateTime> _utcNow;
+        private static readonly SemaphoreSlim IoGate = new SemaphoreSlim(1);
+        private static readonly object LeaseLock = new object();
+        private static readonly Dictionary<string, int> Leases = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Regex OwnedName = new Regex(@"^[a-f0-9]{64}\.(rfa|rvt|rte|dat)$", RegexOptions.Compiled);
 
-        public CacheService(string cacheFolder = null, long maxCacheSizeMB = 500)
+        public CacheService(string cacheFolder, long maxCacheSizeMB = 500, int ttlDays = 7, Func<DateTime> utcNow = null)
         {
-            _cacheFolder = cacheFolder ?? Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "BIMHubPlugin",
-                "Cache"
-            );
-
-            _maxCacheSizeBytes = maxCacheSizeMB * 1024 * 1024;
-            _cacheIndex = new ConcurrentDictionary<string, CacheEntry>();
-
-            if (!Directory.Exists(_cacheFolder))
-            {
-                Directory.CreateDirectory(_cacheFolder);
-            }
-
-            LoadCacheIndex();
+            _root = Path.GetFullPath(cacheFolder ?? throw new ArgumentNullException(nameof(cacheFolder)));
+            _maxBytes = checked(Math.Max(1, maxCacheSizeMB) * 1024 * 1024);
+            _ttl = TimeSpan.FromDays(Math.Max(1, ttlDays));
+            _utcNow = utcNow ?? (() => DateTime.UtcNow);
+            Directory.CreateDirectory(_root);
         }
 
-        public string GetCachedFilePath(string url)
+        public async Task<CachedFileLease> AcquireAsync(string url, DateTime version, string extension,
+            Func<Stream, CancellationToken, Task> download, CancellationToken ct = default)
         {
-            string key = GetCacheKey(url);
-            
-            if (_cacheIndex.TryGetValue(key, out var entry))
+            extension = (extension ?? ".rfa").ToLowerInvariant();
+            if (extension != ".rfa" && extension != ".rvt" && extension != ".rte" && extension != ".dat")
+                throw new ArgumentException("Неподдерживаемое расширение файла кэша.");
+            string key;
+            using (var hash = SHA256.Create())
+                key = BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(url + "|" + version.ToUniversalTime().Ticks))).Replace("-", "").ToLowerInvariant();
+            var path = Path.Combine(_root, key + extension);
+            await IoGate.WaitAsync(ct).ConfigureAwait(false);
+            try
             {
-                entry.LastAccessed = DateTime.UtcNow;
-                
-                if (File.Exists(entry.FilePath))
+                ct.ThrowIfCancellationRequested();
+                var fresh = File.Exists(path) && new FileInfo(path).Length > 0 &&
+                    (_utcNow() - File.GetLastWriteTimeUtc(path) <= _ttl || IsLeased(path));
+                if (!fresh)
                 {
-                    return entry.FilePath;
+                    var temporary = path + "." + Guid.NewGuid().ToString("N") + ".part";
+                    try
+                    {
+                        using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, true))
+                        {
+                            await download(stream, ct).ConfigureAwait(false);
+                            if (stream.Length == 0) throw new IOException("Сервер вернул пустой файл.");
+                            if (stream.Length > _maxBytes) throw new IOException("Размер семейства превышает размер кэша.");
+                            await stream.FlushAsync(ct).ConfigureAwait(false);
+                        }
+                        ct.ThrowIfCancellationRequested();
+                        if (File.Exists(path)) File.Delete(path);
+                        File.Move(temporary, path);
+                        File.SetLastWriteTimeUtc(path, _utcNow());
+                    }
+                    finally
+                    {
+                        if (File.Exists(temporary)) File.Delete(temporary);
+                    }
                 }
-                else
-                {
-                    _cacheIndex.TryRemove(key, out _);
-                }
+                File.SetLastAccessTimeUtc(path, _utcNow());
+                lock (LeaseLock) Leases[path] = Leases.TryGetValue(path, out var count) ? count + 1 : 1;
+                try { Trim(path); }
+                catch { Release(path); throw; }
+                return new CachedFileLease(path, () => Release(path));
             }
-
-            return null;
+            finally { IoGate.Release(); }
         }
 
-        public async Task<string> SaveToCacheAsync(string url, byte[] data, string extension = null)
+        private static bool IsLeased(string path)
         {
-            string key = GetCacheKey(url);
-
-            // Имя файла в кэше — всегда хеш URL. Новый Catalog API отдаёт скачивание по
-            // семейство-ориентированному эндпоинту (.../families/{id}/download), а не по
-            // прямому имени файла как старый BimHub, поэтому "красивое" имя из URL больше
-            // не извлечь — а главное, оно было бы одинаковым для всех семейств (последний
-            // сегмент URL — всегда "download"), что раньше приводило бы к перезаписи кэша
-            // одного семейства файлом другого.
-            string fileName = key + (string.IsNullOrEmpty(extension) ? ".dat" : extension);
-
-            string filePath = Path.Combine(_cacheFolder, fileName);
-
-            // .NET Framework 4.8 - используем синхронную версию
-            File.WriteAllBytes(filePath, data);
-
-            var entry = new CacheEntry
-            {
-                Key = key,
-                FilePath = filePath,
-                FileSize = data.Length,
-                CreatedAt = DateTime.UtcNow,
-                LastAccessed = DateTime.UtcNow
-            };
-
-            _cacheIndex[key] = entry;
-
-            await EnforceCacheLimitAsync();
-
-            return filePath;
+            lock (LeaseLock) return Leases.ContainsKey(path);
         }
-        public async Task<string> SaveToCacheAsync(string url, Stream stream, string extension = null)
+        private static void Release(string path)
         {
-            using (var ms = new MemoryStream())
+            lock (LeaseLock)
             {
-                await stream.CopyToAsync(ms);
-                return await SaveToCacheAsync(url, ms.ToArray(), extension);
+                if (!Leases.TryGetValue(path, out var count)) return;
+                if (count == 1) Leases.Remove(path); else Leases[path] = count - 1;
             }
         }
-
+        private IEnumerable<FileInfo> Files() => new DirectoryInfo(_root).EnumerateFiles()
+            .Where(f => OwnedName.IsMatch(f.Name) && (f.Attributes & FileAttributes.ReparsePoint) == 0);
+        public long GetCacheSize() => Files().Sum(f => f.Length);
+        private void Trim(string protectedPath)
+        {
+            var files = Files().OrderBy(f => f.LastAccessTimeUtc).ToList();
+            var size = files.Sum(f => f.Length);
+            foreach (var file in files)
+            {
+                if (file.FullName == protectedPath || IsLeased(file.FullName)) continue;
+                if (size <= _maxBytes && _utcNow() - file.LastWriteTimeUtc <= _ttl) continue;
+                try { var length = file.Length; file.Delete(); size -= length; }
+                catch (IOException) { /* Another Revit process may currently use the file. */ }
+                catch (UnauthorizedAccessException) { /* Keep a file we cannot safely delete. */ }
+            }
+        }
         public void ClearCache()
         {
-            foreach (var entry in _cacheIndex.Values)
+            IoGate.Wait();
+            try
             {
-                try
+                foreach (var file in Files())
                 {
-                    if (File.Exists(entry.FilePath))
-                    {
-                        File.Delete(entry.FilePath);
-                    }
+                    if (IsLeased(file.FullName)) continue;
+                    try { file.Delete(); }
+                    catch (IOException) { }
+                    catch (UnauthorizedAccessException) { }
                 }
-                catch { }
             }
-
-            _cacheIndex.Clear();
+            finally { IoGate.Release(); }
         }
+    }
 
-        public long GetCacheSize()
-        {
-            return _cacheIndex.Values.Sum(e => e.FileSize);
-        }
-
-        private string GetCacheKey(string url)
-        {
-            using (var sha256 = SHA256.Create())
-            {
-                byte[] hash = sha256.ComputeHash(Encoding.UTF8.GetBytes(url));
-                return BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant();
-            }
-        }
-
-        private void LoadCacheIndex()
-        {
-            if (!Directory.Exists(_cacheFolder))
-                return;
-
-            foreach (var filePath in Directory.GetFiles(_cacheFolder))
-            {
-                var fileInfo = new FileInfo(filePath);
-                string key = Path.GetFileNameWithoutExtension(filePath);
-
-                var entry = new CacheEntry
-                {
-                    Key = key,
-                    FilePath = filePath,
-                    FileSize = fileInfo.Length,
-                    CreatedAt = fileInfo.CreationTimeUtc,
-                    LastAccessed = fileInfo.LastAccessTimeUtc
-                };
-
-                _cacheIndex[key] = entry;
-            }
-        }
-
-        private async Task EnforceCacheLimitAsync()
-        {
-            long currentSize = GetCacheSize();
-
-            if (currentSize <= _maxCacheSizeBytes)
-                return;
-
-            var entriesToRemove = _cacheIndex.Values
-                .OrderBy(e => e.LastAccessed)
-                .Take((int)(currentSize * 0.2 / 1024 / 1024))
-                .ToList();
-
-            foreach (var entry in entriesToRemove)
-            {
-                try
-                {
-                    if (File.Exists(entry.FilePath))
-                    {
-                        File.Delete(entry.FilePath);
-                    }
-                    _cacheIndex.TryRemove(entry.Key, out _);
-                }
-                catch { }
-            }
-
-            await Task.CompletedTask;
-        }
-
-        private class CacheEntry
-        {
-            public string Key { get; set; }
-            public string FilePath { get; set; }
-            public long FileSize { get; set; }
-            public DateTime CreatedAt { get; set; }
-            public DateTime LastAccessed { get; set; }
-        }
+    public sealed class CachedFileLease : IDisposable
+    {
+        private Action _release;
+        public string FilePath { get; }
+        internal CachedFileLease(string filePath, Action release) { FilePath = filePath; _release = release; }
+        public void Dispose() => Interlocked.Exchange(ref _release, null)?.Invoke();
     }
 }

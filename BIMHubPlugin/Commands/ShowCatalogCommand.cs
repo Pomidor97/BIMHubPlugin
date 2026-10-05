@@ -12,6 +12,7 @@ namespace BIMHubPlugin.Commands
             try
             {
                 UIApplication uiApp = commandData.Application;
+                App.SetActiveDocument(uiApp.ActiveUIDocument?.Document);
                 DockablePaneId paneId = App.GetDockablePaneId();
                 DockablePane pane = uiApp.GetDockablePane(paneId);
 

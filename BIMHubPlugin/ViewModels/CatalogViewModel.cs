@@ -1,143 +1,59 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Input;
-using Autodesk.Revit.ApplicationServices;
 using BIMHubPlugin.Models;
 using BIMHubPlugin.Services;
 using BIMHubPlugin.Views;
 
 namespace BIMHubPlugin.ViewModels
 {
-    /// <summary>
-    /// ViewModel для каталога (MVVM pattern)
-    /// </summary>
-    public class CatalogViewModel : INotifyPropertyChanged
+    public sealed class CatalogViewModel : INotifyPropertyChanged, IDisposable
     {
         private readonly CatalogApiClient _apiClient;
         private readonly FamilyLoaderService _loaderService;
-        private readonly CacheService _cacheService;
-        private readonly System.Windows.Threading.Dispatcher _dispatcher;
-        // Токен истёк/недействителен (сервер вернул 401) — сбрасываем кэш и просим войти заново
-        // (раздел 7.2/10 плана: полноценная обработка истечения сессии вместо "просто ошибка").
         private readonly Action _onUnauthorized;
-
-        // Фильтры
-        private string _searchText;
+        private readonly CancellationTokenSource _lifetime = new CancellationTokenSource();
+        private readonly HashSet<FamilyDetailsWindow> _details = new HashSet<FamilyDetailsWindow>();
+        private CancellationTokenSource _request;
+        private bool _disposed, _suspendSearch, _isFamilyLoading, _searchPending;
+        private string _searchText, _statusMessage;
         private Category _selectedCategory;
         private Section _selectedSection;
         private Manufacturer _selectedManufacturer;
         private RevitVersion _selectedRevitVersion;
-
-        // Данные
         private ObservableCollection<FamilyItem> _families;
         private ObservableCollection<Category> _categories;
         private ObservableCollection<Section> _sections;
         private ObservableCollection<Manufacturer> _manufacturers;
         private ObservableCollection<RevitVersion> _revitVersions;
-
-        // Пагинация
-        private int _currentPage = 1;
-        private int _pageSize = 12;
-        private int _totalPages;
-        private int _totalCount;
-
-        // UI состояние
+        private int _currentPage = 1, _pageSize, _totalPages, _totalCount;
         private bool _isLoading;
-        private string _statusMessage;
         private FamilyItem _selectedFamily;
 
-        public CatalogViewModel(
-            CatalogApiClient apiClient,
-            FamilyLoaderService loaderService,
-            CacheService cacheService,
-            System.Windows.Threading.Dispatcher dispatcher,
-            Action onUnauthorized = null)
+        public CatalogViewModel(CatalogApiClient apiClient, FamilyLoaderService loaderService, CacheService cacheService,
+            System.Windows.Threading.Dispatcher dispatcher, Action onUnauthorized = null, int pageSize = 12)
         {
-            _apiClient = apiClient ?? throw new ArgumentNullException(nameof(apiClient));
-            _loaderService = loaderService ?? throw new ArgumentNullException(nameof(loaderService));
-            _cacheService = cacheService ?? throw new ArgumentNullException(nameof(cacheService));
-            _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
-            _onUnauthorized = onUnauthorized;
-
-            // Инициализация коллекций
+            _apiClient = apiClient; _loaderService = loaderService; _onUnauthorized = onUnauthorized;
+            _pageSize = Math.Max(1, Math.Min(100, pageSize));
             Families = new ObservableCollection<FamilyItem>();
             Categories = new ObservableCollection<Category>();
             Sections = new ObservableCollection<Section>();
             Manufacturers = new ObservableCollection<Manufacturer>();
             RevitVersions = new ObservableCollection<RevitVersion>();
-
-            // Команды
-            SearchCommand = new RelayCommand(async _ => await SearchAsync());
-            LoadFamilyCommand = new RelayCommand(async param => await LoadFamilyAsync(param as FamilyItem), 
-                param => param is FamilyItem && !IsLoading);
-            NextPageCommand = new RelayCommand(async _ => await NextPageAsync(), _ => CurrentPage < TotalPages && !IsLoading);
-            PreviousPageCommand = new RelayCommand(async _ => await PreviousPageAsync(), _ => CurrentPage > 1 && !IsLoading);
-            ClearFiltersCommand = new RelayCommand(_ => ClearFilters());
-            RefreshCommand = new RelayCommand(async _ => await LoadInitialDataAsync());
-            OpenFamilyDetailsCommand = new RelayCommand(
-                param => OpenFamilyDetails(param as FamilyItem),
-                param => param is FamilyItem && !IsLoading
-            );
-            LogoutCommand = new RelayCommand(_ => Logout());
-
-
-            // Загружаем начальные данные
-            Task.Run(async () => await LoadInitialDataAsync());
+            SearchCommand = new RelayCommand(async _ => await SearchAsync(), _ => !_disposed && !_isFamilyLoading);
+            ClearFiltersCommand = new RelayCommand(_ => ClearFilters(), _ => !_disposed && !_isFamilyLoading);
+            RefreshCommand = new RelayCommand(async _ => await InitializeAsync(), _ => !_disposed && !IsLoading);
+            NextPageCommand = new RelayCommand(async _ => { CurrentPage++; await LoadPageAsync(); }, _ => !_disposed && !IsLoading && CurrentPage < TotalPages);
+            PreviousPageCommand = new RelayCommand(async _ => { CurrentPage--; await LoadPageAsync(); }, _ => !_disposed && !IsLoading && CurrentPage > 1);
+            LoadFamilyCommand = new RelayCommand(async item => await LoadFamilyAsync(item as FamilyItem), item => !_disposed && !IsLoading && item is FamilyItem);
+            OpenFamilyDetailsCommand = new RelayCommand(async item => await OpenDetailsAsync(item as FamilyItem), item => !_disposed && !IsLoading && item is FamilyItem);
+            LogoutCommand = new RelayCommand(async _ => await LogoutAsync(), _ => !_disposed && !_isFamilyLoading);
         }
-
-        private async void OpenFamilyDetails(FamilyItem family)
-        {
-            if (family == null)
-                return;
-
-            // Список (FamilyListItemDto) не содержит Description/MainFileDisplayName/Attachments —
-            // это поля только карточки (FamilyDetailDto), поэтому перед открытием окна деталей
-            // подгружаем полную запись по Id.
-            FamilyItem detail;
-            try
-            {
-                detail = await _apiClient.GetFamilyByIdAsync(family.Id);
-            }
-            catch (UnauthorizedAccessException)
-            {
-                StatusMessage = "Сессия истекла, требуется повторный вход";
-                _onUnauthorized?.Invoke();
-                return;
-            }
-            catch (Exception ex)
-            {
-                SimpleLogger.Error($"OpenFamilyDetails: failed to load detail for '{family.Name}'", ex);
-                StatusMessage = $"Ошибка загрузки карточки: {ex.Message}";
-                return;
-            }
-
-            _dispatcher.BeginInvoke(new Action(() =>
-            {
-                FamilyDetailsWindow window = null;
-
-                var vm = new FamilyDetailsViewModel(
-                    detail,
-                    _apiClient,
-                    closeAction: () => window?.Close(),
-                    loadAction: async () =>
-                    {
-                        window?.Close();
-                        await LoadFamilyAsync(detail);
-                    });
-
-                window = new FamilyDetailsWindow
-                {
-                    DataContext = vm
-                };
-
-                window.ShowDialog();
-            }));
-        }
-
-
 
         #region Properties
 
@@ -163,7 +79,7 @@ namespace BIMHubPlugin.ViewModels
                 {
                     _selectedCategory = value;
                     OnPropertyChanged(nameof(SelectedCategory));
-                    Task.Run(async () => await SearchAsync());
+                    QueueSearch();
                 }
             }
         }
@@ -177,7 +93,7 @@ namespace BIMHubPlugin.ViewModels
                 {
                     _selectedSection = value;
                     OnPropertyChanged(nameof(SelectedSection));
-                    Task.Run(async () => await SearchAsync());
+                    QueueSearch();
                 }
             }
         }
@@ -191,7 +107,7 @@ namespace BIMHubPlugin.ViewModels
                 {
                     _selectedManufacturer = value;
                     OnPropertyChanged(nameof(SelectedManufacturer));
-                    Task.Run(async () => await SearchAsync());
+                    QueueSearch();
                 }
             }
         }
@@ -205,7 +121,7 @@ namespace BIMHubPlugin.ViewModels
                 {
                     _selectedRevitVersion = value;
                     OnPropertyChanged(nameof(SelectedRevitVersion));
-                    Task.Run(async () => await SearchAsync());
+                    QueueSearch();
                 }
             }
         }
@@ -312,6 +228,7 @@ namespace BIMHubPlugin.ViewModels
             {
                 _isLoading = value;
                 OnPropertyChanged(nameof(IsLoading));
+                CommandManager.InvalidateRequerySuggested();
             }
         }
 
@@ -327,10 +244,6 @@ namespace BIMHubPlugin.ViewModels
 
         #endregion
 
-        
-        
-        #region Commands
-
         public ICommand SearchCommand { get; }
         public ICommand LoadFamilyCommand { get; }
         public ICommand NextPageCommand { get; }
@@ -340,320 +253,160 @@ namespace BIMHubPlugin.ViewModels
         public ICommand OpenFamilyDetailsCommand { get; }
         public ICommand LogoutCommand { get; }
 
-
-        #endregion
-
-        #region Methods
-
-        /// <summary>
-        /// Загрузка начальных данных (фильтры + первая страница семейств)
-        /// </summary>
-        private async Task LoadInitialDataAsync()
-    {
-        try
+        private void QueueSearch()
         {
-            IsLoading = true;
-            StatusMessage = "Загрузка данных...";
-
-            SimpleLogger.Log("LoadInitialDataAsync started");
-
-            var categoriesTask = _apiClient.GetCategoriesAsync();
-            var sectionsTask = _apiClient.GetSectionsAsync();
-            var manufacturersTask = _apiClient.GetManufacturersAsync();
-            var versionsTask = _apiClient.GetRevitVersionsAsync();
-
-            await Task.WhenAll(categoriesTask, sectionsTask, manufacturersTask, versionsTask);
-
-            SimpleLogger.Log($"Loaded {categoriesTask.Result.Count} categories");
-
-            // Используем Dispatcher для обновления UI коллекций
-            _dispatcher.Invoke(() =>
+            if (_disposed || _suspendSearch) return;
+            if (_isFamilyLoading) { _searchPending = true; return; }
+            _ = SearchAsync(); // All errors/cancellation are handled by RunRequestAsync.
+        }
+        private Task SearchAsync() { CurrentPage = 1; return LoadPageAsync(); }
+        private Task LoadPageAsync() => RunRequestAsync(FetchPageAsync);
+        public Task InitializeAsync() => RunRequestAsync(async ct =>
+        {
+            var categories = _apiClient.GetCategoriesAsync(ct);
+            var sections = _apiClient.GetSectionsAsync(ct);
+            var manufacturers = _apiClient.GetManufacturersAsync(ct);
+            var versions = _apiClient.GetRevitVersionsAsync(ct);
+            await Task.WhenAll(categories, sections, manufacturers, versions);
+            ct.ThrowIfCancellationRequested();
+            _suspendSearch = true;
+            try
             {
-                SimpleLogger.Log("Updating UI collections...");
-                
-                Categories.Clear();
-                Categories.Add(new Category { Id = Guid.Empty, Name = "Все категории" });
-                foreach (var cat in categoriesTask.Result)
-                    Categories.Add(cat);
+                Categories = new ObservableCollection<Category>(await categories);
+                Categories.Insert(0, new Category { Id = Guid.Empty, Name = "Все категории" });
+                Sections = new ObservableCollection<Section>(await sections);
+                Sections.Insert(0, new Section { Id = Guid.Empty, Name = "Все подкатегории" });
+                Manufacturers = new ObservableCollection<Manufacturer>(await manufacturers);
+                Manufacturers.Insert(0, new Manufacturer { Id = Guid.Empty, Name = "Все производители" });
+                RevitVersions = new ObservableCollection<RevitVersion>(await versions);
+                RevitVersions.Insert(0, new RevitVersion { Id = Guid.Empty, Name = "Все версии" });
+                SelectedCategory = Categories.First();
+                SelectedSection = Sections.First();
+                SelectedManufacturer = Manufacturers.First();
+                SelectedRevitVersion = RevitVersions.First();
+                CurrentPage = 1;
+            }
+            finally { _suspendSearch = false; }
+            await FetchPageAsync(ct);
+        });
 
-                Sections.Clear();
-                Sections.Add(new Section { Id = Guid.Empty, Name = "Все подкатегории" });
-                foreach (var sec in sectionsTask.Result)
-                    Sections.Add(sec);
-
-                Manufacturers.Clear();
-                Manufacturers.Add(new Manufacturer { Id = Guid.Empty, Name = "Все производители" });
-                foreach (var man in manufacturersTask.Result)
-                    Manufacturers.Add(man);
-
-                RevitVersions.Clear();
-                RevitVersions.Add(new RevitVersion { Id = Guid.Empty, Name = "Все версии" });
-                foreach (var ver in versionsTask.Result)
-                    RevitVersions.Add(ver);
-
+        private async Task RunRequestAsync(Func<CancellationToken, Task> action)
+        {
+            if (_disposed || _isFamilyLoading) return;
+            _request?.Cancel();
+            var request = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+            _request = request;
+            IsLoading = true;
+            StatusMessage = "Загрузка...";
+            try { await action(request.Token); }
+            catch (OperationCanceledException) when (request.IsCancellationRequested) { }
+            catch (UnauthorizedAccessException) { if (!_disposed && ReferenceEquals(_request, request)) _onUnauthorized?.Invoke(); }
+            catch (Exception ex)
+            {
+                if (!_disposed && ReferenceEquals(_request, request)) { StatusMessage = ex.Message; SimpleLogger.Error("Catalog request failed", ex); }
+            }
+            finally
+            {
+                if (ReferenceEquals(_request, request))
+                {
+                    _request = null;
+                    if (!_disposed) IsLoading = false;
+                }
+                request.Dispose();
+            }
+        }
+        private async Task FetchPageAsync(CancellationToken ct)
+        {
+            var result = await _apiClient.GetFamiliesAsync(new FilterOptions
+            {
+                Search = SearchText,
+                CategoryId = SelectedCategory?.Id != Guid.Empty ? SelectedCategory?.Id : null,
+                SectionId = SelectedSection?.Id != Guid.Empty ? SelectedSection?.Id : null,
+                ManufacturerId = SelectedManufacturer?.Id != Guid.Empty ? SelectedManufacturer?.Id : null,
+                RevitVersionId = SelectedRevitVersion?.Id != Guid.Empty ? SelectedRevitVersion?.Id : null,
+                Page = CurrentPage, PageSize = _pageSize
+            }, ct);
+            ct.ThrowIfCancellationRequested();
+            // Continuations stay on the WPF dispatcher. A superseded request cannot publish its page.
+            Families = new ObservableCollection<FamilyItem>(result.Items);
+            TotalPages = Math.Max(1, result.TotalPages);
+            TotalCount = result.TotalCount;
+            StatusMessage = TotalCount == 0 ? "Ничего не найдено" : "Найдено: " + TotalCount;
+        }
+        private void ClearFilters()
+        {
+            _suspendSearch = true;
+            try
+            {
+                SearchText = "";
                 SelectedCategory = Categories.FirstOrDefault();
                 SelectedSection = Sections.FirstOrDefault();
                 SelectedManufacturer = Manufacturers.FirstOrDefault();
                 SelectedRevitVersion = RevitVersions.FirstOrDefault();
-            });
-
-            SimpleLogger.Log("UI update completed");
-
-            await LoadPageAsync();
-
-            StatusMessage = "Готово";
-            SimpleLogger.Log("LoadInitialDataAsync completed successfully");
+            }
+            finally { _suspendSearch = false; }
+            QueueSearch();
         }
-        catch (UnauthorizedAccessException)
+        private async Task OpenDetailsAsync(FamilyItem family)
         {
-            StatusMessage = "Сессия истекла, требуется повторный вход";
-            _onUnauthorized?.Invoke();
-        }
-        catch (Exception ex)
-        {
-            SimpleLogger.Error("LoadInitialDataAsync failed", ex);
-            StatusMessage = $"Ошибка: {ex.Message}";
-        }
-        finally
-        {
-            IsLoading = false;
-        }
-    }
-
-        /// <summary>
-        /// Поиск семейств с текущими фильтрами
-        /// </summary>
-        private async Task SearchAsync()
-        {
+            if (family == null || _disposed) return;
             try
             {
-                CurrentPage = 1; // Сбрасываем на первую страницу
-                await LoadPageAsync();
+                var detail = await _apiClient.GetFamilyByIdAsync(family.Id, _lifetime.Token);
+                if (_disposed) return;
+                var window = new FamilyDetailsWindow();
+                var vm = new FamilyDetailsViewModel(detail, _apiClient, () => window.Close(), async () =>
+                { window.Close(); await LoadFamilyAsync(detail); });
+                window.DataContext = vm;
+                _details.Add(window);
+                try { window.ShowDialog(); }
+                finally { _details.Remove(window); vm.Dispose(); }
             }
-            catch (Exception ex)
-            {
-                StatusMessage = $"Ошибка поиска: {ex.Message}";
-            }
+            catch (OperationCanceledException) when (_disposed) { }
+            catch (UnauthorizedAccessException) { if (!_disposed) _onUnauthorized?.Invoke(); }
+            catch (Exception ex) { if (!_disposed) StatusMessage = ex.Message; }
         }
-
-        /// <summary>
-        /// Загрузить следующую страницу
-        /// </summary>
-        private async Task NextPageAsync()
-        {
-            if (CurrentPage >= TotalPages) return;
-
-            CurrentPage++;
-            await LoadPageAsync();
-        }
-
-        /// <summary>
-        /// Загрузить предыдущую страницу
-        /// </summary>
-        private async Task PreviousPageAsync()
-        {
-            if (CurrentPage <= 1) return;
-
-            CurrentPage--;
-            await LoadPageAsync();
-        }
-
-        /// <summary>
-        /// Загрузить текущую страницу с фильтрами
-        /// </summary>
-        private async Task LoadPageAsync()
-        {
-            try
-            {
-                SimpleLogger.Log($"LoadPageAsync started - Page {CurrentPage}");
-                IsLoading = true;
-
-                var filter = new FilterOptions
-                {
-                    Search = SearchText,
-                    CategoryId = SelectedCategory?.Id != Guid.Empty ? SelectedCategory?.Id : null,
-                    SectionId = SelectedSection?.Id != Guid.Empty ? SelectedSection?.Id : null,
-                    ManufacturerId = SelectedManufacturer?.Id != Guid.Empty ? SelectedManufacturer?.Id : null,
-                    RevitVersionId = SelectedRevitVersion?.Id != Guid.Empty ? SelectedRevitVersion?.Id : null,
-                    Page = CurrentPage,
-                    PageSize = _pageSize
-                };
-
-                var result = await _apiClient.GetFamiliesAsync(filter);
-
-                SimpleLogger.Log($"Received {result.Items.Count} families");
-
-                // Обновляем через Dispatcher
-                _dispatcher.Invoke(() =>
-                {
-                    Families.Clear();
-                    foreach (var family in result.Items)
-                        Families.Add(family);
-
-                    TotalPages = result.TotalPages;
-                    TotalCount = result.TotalCount;
-                });
-
-                StatusMessage = result.TotalCount > 0 
-                    ? $"Найдено: {result.TotalCount}" 
-                    : "Ничего не найдено";
-                
-                SimpleLogger.Log($"LoadPageAsync completed - Total: {result.TotalCount}");
-            }
-            catch (UnauthorizedAccessException)
-            {
-                StatusMessage = "Сессия истекла, требуется повторный вход";
-                _onUnauthorized?.Invoke();
-            }
-            catch (Exception ex)
-            {
-                SimpleLogger.Error("LoadPageAsync failed", ex);
-                StatusMessage = $"Ошибка: {ex.Message}";
-
-                _dispatcher.Invoke(() =>
-                {
-                    Families.Clear();
-                    TotalPages = 0;
-                    TotalCount = 0;
-                });
-            }
-            finally
-            {
-                IsLoading = false;
-            }
-        }
-
-        /// <summary>
-        /// Загрузить семейство в Revit
-        /// </summary>
         private async Task LoadFamilyAsync(FamilyItem family)
         {
-            if (family == null) return;
-
+            if (family == null || _disposed || _isFamilyLoading) return;
+            _isFamilyLoading = true;
+            IsLoading = true;
             try
             {
-                SimpleLogger.Log($"CatalogViewModel.LoadFamilyAsync: Starting for '{family.Name}'");
-                
-                IsLoading = true;
-                SelectedFamily = family;
-                StatusMessage = "Инициализация..."; // ВАЖНО: инициализируем перед вызовом
-
-                await _loaderService.LoadFamilyAsync(
-                    family,
-                    progressMessage => 
-                    {
-                        // Обновляем статус в UI потоке
-                        _dispatcher.Invoke(() =>
-                        {
-                            StatusMessage = progressMessage;
-                            SimpleLogger.Log($"Progress: {progressMessage}");
-                        });
-                    },
-                    (success, message) =>
-                    {
-                        // Callback выполняется в главном потоке Revit
-                        _dispatcher.Invoke(() =>
-                        {
-                            StatusMessage = message;
-                            IsLoading = false;
-                            
-                            SimpleLogger.Log($"LoadFamily completed - Success: {success}, Message: {message}");
-
-                            if (success)
-                            {
-                                System.Windows.MessageBox.Show(
-                                    message,
-                                    "Успех",
-                                    System.Windows.MessageBoxButton.OK,
-                                    System.Windows.MessageBoxImage.Information
-                                );
-                            }
-                            else
-                            {
-                                System.Windows.MessageBox.Show(
-                                    message,
-                                    "Ошибка",
-                                    System.Windows.MessageBoxButton.OK,
-                                    System.Windows.MessageBoxImage.Error
-                                );
-                            }
-                        });
-                    }
-                );
+                await _loaderService.LoadFamilyAsync(family, text => { if (!_disposed) StatusMessage = text; },
+                    (ok, message) => { if (!_disposed) StatusMessage = message; }, ct: _lifetime.Token);
             }
-            catch (UnauthorizedAccessException)
+            catch (OperationCanceledException) when (_disposed) { }
+            catch (UnauthorizedAccessException) { if (!_disposed) _onUnauthorized?.Invoke(); }
+            catch (Exception ex) { if (!_disposed) StatusMessage = ex.Message; }
+            finally
             {
-                _dispatcher.Invoke(() =>
+                _isFamilyLoading = false;
+                if (!_disposed)
                 {
-                    StatusMessage = "Сессия истекла, требуется повторный вход";
                     IsLoading = false;
-                });
-                _onUnauthorized?.Invoke();
-            }
-            catch (Exception ex)
-            {
-                SimpleLogger.Error($"CatalogViewModel.LoadFamilyAsync failed for '{family?.Name}'", ex);
-
-                _dispatcher.Invoke(() =>
-                {
-                    StatusMessage = $"Ошибка: {ex.Message}";
-                    IsLoading = false;
-
-                    System.Windows.MessageBox.Show(
-                        $"Ошибка загрузки семейства:\n{ex.Message}",
-                        "Ошибка",
-                        System.Windows.MessageBoxButton.OK,
-                        System.Windows.MessageBoxImage.Error
-                    );
-                });
+                    if (_searchPending) { _searchPending = false; QueueSearch(); }
+                }
             }
         }
-
-        /// <summary>
-        /// Выйти из системы: стереть закэшированный токен (TokenStore) и снова показать окно
-        /// логина — переиспользуем тот же коллбэк, что и на истёкшей сессии (401), эффект
-        /// идентичен: "нет валидного токена → войти заново".
-        /// </summary>
-        private void Logout()
+        private async Task LogoutAsync()
         {
-            var confirm = System.Windows.MessageBox.Show(
-                "Выйти из системы? Потребуется повторный вход по логину и паролю AD.",
-                "Выход",
-                System.Windows.MessageBoxButton.YesNo,
-                System.Windows.MessageBoxImage.Question);
-
-            if (confirm == System.Windows.MessageBoxResult.Yes)
-                _onUnauthorized?.Invoke();
+            if (System.Windows.MessageBox.Show("Выйти из системы?", "BIMHub",
+                System.Windows.MessageBoxButton.YesNo) != System.Windows.MessageBoxResult.Yes) return;
+            try { await _apiClient.LogoutAsync(_lifetime.Token); }
+            catch (Exception ex) { SimpleLogger.Error("Server logout was not confirmed", ex); }
+            if (!_disposed) _onUnauthorized?.Invoke();
         }
-
-        /// <summary>
-        /// Очистить все фильтры
-        /// </summary>
-        private void ClearFilters()
+        public void Dispose()
         {
-            SearchText = string.Empty;
-            SelectedCategory = Categories.FirstOrDefault();
-            SelectedSection = Sections.FirstOrDefault();
-            SelectedManufacturer = Manufacturers.FirstOrDefault();
-            SelectedRevitVersion = RevitVersions.FirstOrDefault();
-            
-            // Автоматически выполняем поиск после очистки
-            Task.Run(async () => await SearchAsync());
+            if (_disposed) return;
+            _disposed = true;
+            _lifetime.Cancel();
+            _request?.Cancel();
+            foreach (var window in _details.ToArray()) window.Close();
+            _lifetime.Dispose();
         }
-
-        #endregion
-
-        #region INotifyPropertyChanged
-
         public event PropertyChangedEventHandler PropertyChanged;
-
-        protected virtual void OnPropertyChanged(string propertyName)
-        {
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
-        }
-
-        #endregion
-        
-        
+        private void OnPropertyChanged(string name) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
     }
 }

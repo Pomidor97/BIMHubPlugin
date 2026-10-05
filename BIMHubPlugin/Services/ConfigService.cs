@@ -6,7 +6,7 @@ namespace BIMHubPlugin.Services
 {
     public class PluginConfig
     {
-        public string ApiBaseUrl { get; set; } = "http://bimhub.kazgor.kz/api";
+        public string ApiBaseUrl { get; set; } = "https://bimhub.kazgor.kz/api";
         public int CacheSizeMB { get; set; } = 500;
         public int RequestTimeoutSeconds { get; set; } = 300;
         public int DefaultPageSize { get; set; } = 12;
@@ -57,15 +57,10 @@ namespace BIMHubPlugin.Services
                         return _cachedConfig;
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
-                    _cachedConfig = CreateDefaultConfig();
-                    try
-                    {
-                        SaveConfig(_cachedConfig);
-                    }
-                    catch { }
-                    return _cachedConfig;
+                    _cachedConfig = null;
+                    throw new InvalidOperationException("Не удалось прочитать конфигурацию " + ConfigPath + ": " + ex.Message, ex);
                 }
             }
         }
@@ -126,7 +121,7 @@ namespace BIMHubPlugin.Services
         {
             return new PluginConfig
             {
-                ApiBaseUrl = "http://bimhub.kazgor.kz/api",
+                ApiBaseUrl = "https://bimhub.kazgor.kz/api",
                 CacheSizeMB = 500,
                 RequestTimeoutSeconds = 300,
                 DefaultPageSize = 12,
@@ -146,10 +141,10 @@ namespace BIMHubPlugin.Services
 
             if (string.IsNullOrWhiteSpace(config.ApiBaseUrl))
             {
-                config.ApiBaseUrl = "http://bimhub.kazgor.kz/api";
+                config.ApiBaseUrl = "https://bimhub.kazgor.kz/api";
             }
 
-            config.ApiBaseUrl = config.ApiBaseUrl.TrimEnd('/');
+            config.ApiBaseUrl = ApiEndpoint.Normalize(config.ApiBaseUrl);
 
             if (config.CacheSizeMB <= 0)
             {

@@ -1,61 +1,39 @@
 using System;
 using System.Net.Http;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using BIMHubPlugin.Models;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace BIMHubPlugin.Services
 {
-    /// <summary>
-    /// Логин через AD-авторизацию BimHelpDesk (POST /api/auth/login) — раздел 7.2/10 плана
-    /// объединения: полноценный логин вместо статического токена в открытом config.json.
-    /// </summary>
     public static class AuthApiClient
     {
-        public static async Task<LoginResult> LoginAsync(string apiBaseUrl, string username, string password)
+        public static async Task<LoginResult> LoginAsync(string apiBaseUrl, string username, string password, CancellationToken ct = default)
         {
-            using (var client = new HttpClient { Timeout = TimeSpan.FromSeconds(30) })
+            var endpoint = ApiEndpoint.Normalize(apiBaseUrl);
+            using (var handler = new HttpClientHandler { AllowAutoRedirect = false })
+            using (var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(30) })
+            using (var content = new StringContent(JsonConvert.SerializeObject(new { username, password, longLived = true }), Encoding.UTF8, "application/json"))
+            using (var response = await client.PostAsync(endpoint + "/auth/login", content, ct).ConfigureAwait(false))
             {
-                // longLived: true — просим сервер выпустить токен на 30 дней (JwtSettings:PluginExpiresMinutes)
-                // вместо обычных 2 часов веб-сессии. Токен кэшируется через TokenStore (DPAPI), поэтому
-                // логин по AD нужен один раз, а не каждые пару часов посреди рабочего дня в Revit.
-                var body = JsonConvert.SerializeObject(new { username, password, longLived = true });
-                var content = new StringContent(body, Encoding.UTF8, "application/json");
-
-                var url = $"{apiBaseUrl.TrimEnd('/')}/auth/login";
-                SimpleLogger.Log($"AuthApiClient.LoginAsync: POST {url}");
-
-                HttpResponseMessage response;
-                try
-                {
-                    response = await client.PostAsync(url, content);
-                }
-                catch (Exception ex)
-                {
-                    SimpleLogger.Error("AuthApiClient.LoginAsync: request failed", ex);
-                    throw new Exception($"Не удалось подключиться к серверу: {ex.Message}", ex);
-                }
-
-                var json = await response.Content.ReadAsStringAsync();
-
+                var json = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                ct.ThrowIfCancellationRequested();
                 if (!response.IsSuccessStatusCode)
                 {
-                    string message = "Неверный логин или пароль";
+                    var message = "Не удалось выполнить вход (" + (int)response.StatusCode + ").";
                     try
                     {
-                        var err = JsonConvert.DeserializeAnonymousType(json, new { message = "" });
-                        if (err != null && !string.IsNullOrEmpty(err.message))
-                            message = err.message;
+                        var error = JObject.Parse(json);
+                        message = (string)error["message"] ?? (string)error["title"] ?? message;
                     }
-                    catch { /* тело не JSON-объект с message — используем сообщение по умолчанию */ }
-
-                    SimpleLogger.Log($"AuthApiClient.LoginAsync: failed, status {response.StatusCode}, message '{message}'");
-                    throw new Exception(message);
+                    catch (JsonException) { }
+                    throw new InvalidOperationException(message);
                 }
-
                 var result = JsonConvert.DeserializeObject<LoginResult>(json);
-                SimpleLogger.Log($"AuthApiClient.LoginAsync: success for '{result?.Username}'");
+                if (string.IsNullOrWhiteSpace(result?.Token)) throw new InvalidOperationException("Сервер не вернул токен сессии.");
                 return result;
             }
         }
